@@ -49,6 +49,7 @@ public class EditorActivity extends Activity {
         private int chip;          // 0 to 5 the pieces, 6 reset, 7 done
         private boolean editing;
         private int mode;          // 0 move, 1 size, 2 show or hide
+        private int row;           // 0 the pieces, 1 the trash button
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint title = Ui.text(Ui.displaySemibold, 1, 0xFFFFFFFF), body = Ui.text(Ui.medium, 1, 0xCCFFFFFF),
                 big = Ui.numbers(Ui.light, 1, 0xFFFFFFFF), small = Ui.text(Ui.semibold, 1, 0xFFFFFFFF);
@@ -119,13 +120,19 @@ public class EditorActivity extends Activity {
                 return true;
             }
             switch (code) {
-                case KeyEvent.KEYCODE_DPAD_LEFT: chip = Math.max(0, chip - 1); break;
-                case KeyEvent.KEYCODE_DPAD_RIGHT: chip = Math.min(7, chip + 1); break;
-                case KeyEvent.KEYCODE_DPAD_UP:
-                case KeyEvent.KEYCODE_DPAD_DOWN:
-                    break;
+                case KeyEvent.KEYCODE_DPAD_LEFT: if (row == 0) chip = Math.max(0, chip - 1); break;
+                case KeyEvent.KEYCODE_DPAD_RIGHT: if (row == 0) chip = Math.min(7, chip + 1); break;
+                case KeyEvent.KEYCODE_DPAD_UP: row = 0; break;
+                case KeyEvent.KEYCODE_DPAD_DOWN: if (chip < 6) row = 1; break;
                 default:
                     if (e.getRepeatCount() > 0) return true;
+                    if (row == 1) {   // the trash: removes the picked piece, or brings it back
+                        boolean gone = Prefs.lay(KEYS[chip] + "H", 0) > 0;
+                        Prefs.setLay(KEYS[chip] + "H", gone ? 0 : 1);
+                        hint = gone ? NAMES[chip] + " vuelve a verse" : NAMES[chip] + " eliminado";
+                        invalidate();
+                        return true;
+                    }
                     if (chip < 6) {
                         editing = true;
                         mode = 0;
@@ -186,6 +193,19 @@ public class EditorActivity extends Activity {
                 x += cw + 18 * k;
             }
             small.setColor(0xFFFFFFFF);
+            // the trash button, under the pieces
+            if (chip < 6) {
+                boolean gone = Prefs.lay(KEYS[chip] + "H", 0) > 0;
+                String text = (gone ? "Devolver " : "Eliminar ") + NAMES[chip];
+                float tw = small.measureText(text) + 120 * k, ty = cy + 96 * k;
+                r.set(px, ty, px + tw, ty + 70 * k);
+                boolean on = row == 1;
+                fill.setColor(on ? (gone ? 0xFF1DB954 : 0xFFE3122B) : 0x33FFFFFF);
+                c.drawRoundRect(r, 35 * k, 35 * k, fill);
+                drawTrash(c, px + 50 * k, ty + 35 * k, k, on ? 0xFFFFFFFF : 0xFFFF6A72);
+                small.setColor(on ? 0xFFFFFFFF : 0xFFFFFFFF);
+                c.drawText(text, px + 92 * k, ty + 46 * k, small);
+            }
             // the help, at the right
             float hx = px + pw + 60 * k;
             body.setColor(0xCCFFFFFF);
@@ -287,6 +307,27 @@ public class EditorActivity extends Activity {
                 c.restore();
             }
             c.restore();
+        }
+
+        /** A trash can, centered on (x, y). */
+        private void drawTrash(Canvas c, float x, float y, float k, int color) {
+            fill.setColor(color);
+            fill.setStyle(Paint.Style.FILL);
+            // the lid and its handle
+            r.set(x - 15 * k, y - 15 * k, x + 15 * k, y - 11 * k);
+            c.drawRoundRect(r, 2 * k, 2 * k, fill);
+            r.set(x - 5 * k, y - 20 * k, x + 5 * k, y - 15 * k);
+            c.drawRoundRect(r, 2 * k, 2 * k, fill);
+            // the can
+            android.graphics.Path p = new android.graphics.Path();
+            p.moveTo(x - 12 * k, y - 8 * k);
+            p.lineTo(x + 12 * k, y - 8 * k);
+            p.lineTo(x + 10 * k, y + 17 * k);
+            p.lineTo(x - 10 * k, y + 17 * k);
+            p.close();
+            c.drawPath(p, fill);
+            fill.setColor(0x66000000);
+            for (int i = -1; i <= 1; i++) c.drawRect(x + i * 6 * k - 1 * k, y - 4 * k, x + i * 6 * k + 1 * k, y + 13 * k, fill);
         }
 
         private boolean faded;

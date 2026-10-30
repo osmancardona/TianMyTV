@@ -188,7 +188,7 @@ public class TianSettingsActivity extends Activity {
                     break;
                 }
                 case 5: {
-                    int[] list = {0, 15, 30, 45, 60, 90, 120, 180};
+                    int[] list = {0, 5, 10, 30, 60, 150, 180, 270, 300};
                     int left = SleepTimer.minutesLeft(getContext()), next = 0;
                     if (dir > 0) {
                         next = list[list.length - 1];
@@ -263,7 +263,7 @@ public class TianSettingsActivity extends Activity {
                 c.drawBitmap(logo, null, r, fill);
             }
             c.drawText("Tian Demon TV", cx, 720 * k, title);
-            c.drawText("Versión 0.1", cx, 770 * k, small);
+            c.drawText("Versión " + Updates.installedVersion(getContext()), cx, 770 * k, small);
             // on the right: the rows
             float left = 1000 * k, right = 1800 * k, top = 56 * k, rh = 76 * k, gap = 7 * k;
             for (int i = 0; i < labels.length; i++) {
