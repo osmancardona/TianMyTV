@@ -40,6 +40,7 @@ public class UpdateActivity extends Activity {
     private UpdateView view;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private String version, notes, url;
+    private boolean welcome;
     private long size;
     private int state;        // 0 ready, 1 downloading, 2 installing, 3 failed
     private float progress;
@@ -72,7 +73,8 @@ public class UpdateActivity extends Activity {
         notes = i.getStringExtra("notes");
         url = i.getStringExtra("url");
         size = i.getLongExtra("size", 0);
-        if (version == null || url == null || !url.startsWith(TianUpdate.DOWNLOADS)) {
+        welcome = i.getBooleanExtra("welcome", false);
+        if (version == null || (!welcome && (url == null || !url.startsWith(TianUpdate.DOWNLOADS)))) {
             finish();
             return;
         }
@@ -208,7 +210,7 @@ public class UpdateActivity extends Activity {
             boolean ours = code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_DPAD_UP
                     || code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
             if (code == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP && state != 1) {
-                TianUpdate.later(UpdateActivity.this, version);
+                if (!welcome) TianUpdate.later(UpdateActivity.this, version);
                 finish();
                 return true;
             }
@@ -217,7 +219,9 @@ public class UpdateActivity extends Activity {
             if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_LEFT) focus = 0;
             else if (code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_RIGHT) focus = 1;
             else if (e.getRepeatCount() == 0) {
-                if (focus == 0) {
+                if (welcome) {
+                    finish();
+                } else if (focus == 0) {
                     start();
                 } else {
                     TianUpdate.later(UpdateActivity.this, version);
@@ -254,7 +258,7 @@ public class UpdateActivity extends Activity {
                 c.drawBitmap(logo, null, r, fill);
             }
             c.drawText("Tian Demon TV", cx, y + 240 * k, title);
-            c.drawText("NUEVA ACTUALIZACIÓN", cx, y + 290 * k, caps);
+            c.drawText(welcome ? "BIENVENIDO A LA ACTUALIZACIÓN" : "NUEVA ACTUALIZACIÓN", cx, y + 290 * k, caps);
             c.drawText("Versión " + version, cx, y + 380 * k, big);
             // what is new, a few lines
             if (notes != null && !notes.isEmpty() && state == 0) {
@@ -299,11 +303,11 @@ public class UpdateActivity extends Activity {
                 if (state == 2) return;
             }
             // the buttons
-            String[] labels = {state == 3 ? "Reintentar" : "Actualizar", "Más tarde"};
-            for (int i = 0; i < 2; i++) {
+            String[] labels = welcome ? new String[] {"Finalizar"} : new String[] {state == 3 ? "Reintentar" : "Actualizar", "Más tarde"};
+            for (int i = 0; i < labels.length; i++) {
                 float top = by + 70 * k + i * 100 * k;
                 r.set(card.left + 150 * k, top, card.right - 150 * k, top + 80 * k);
-                boolean on = focus == i;
+                boolean on = welcome || focus == i;
                 fill.setColor(i == 0 ? (on ? 0xFFFF2A3A : 0xFFC4101F) : (on ? 0x55FFFFFF : 0x22FFFFFF));
                 c.drawRoundRect(r, 40 * k, 40 * k, fill);
                 if (on) {

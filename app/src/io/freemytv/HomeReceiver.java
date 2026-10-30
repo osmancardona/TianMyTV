@@ -17,6 +17,7 @@ public class HomeReceiver extends BroadcastReceiver {
             Updates.schedule(context);
         } else if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
             HomeMode.verify(context);   // app updated: complete Tian Demon TV mode if something is missing
+            later(() -> TianUpdate.comeBack(context));
             HomeMode.ensureRemoteService(context, 3_000);
             Updates.schedule(context);
             later(() -> Updates.cleanUp(context));

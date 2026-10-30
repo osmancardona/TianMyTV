@@ -130,7 +130,7 @@ final class HomeApps {
      * content), so a shelf of up to 8 looks as it always did. The built-in list keeps 8, and low-memory TVs hold 8 at
      * most, without scrolling: every app on the shelf keeps its logo in memory, at two sizes.
      */
-    private static final int SHELF_VISIBLE = 8, FEW_APPS = 8;
+    private static final int SHELF_VISIBLE = 10, FEW_APPS = 8;
 
     /** Low memory (TCL's 1 GB models): every MB counts. */
     static boolean lowRam(Context c) {
