@@ -133,7 +133,8 @@ final class TianUpdate {
         final Context c = context.getApplicationContext();
         SharedPreferences p = prefs(c);
         final String now = Updates.installedVersion(c);
-        if (now.equals(p.getString("seenVersion", ""))) return;
+        final String seen = p.getString("seenVersion", "");
+        if (now.equals(seen)) return;
         boolean updated = false;
         try {
             android.content.pm.PackageInfo pi = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
@@ -141,6 +142,10 @@ final class TianUpdate {
         } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
         }
         p.edit().putString("seenVersion", now).apply();
+        if (!updated && seen.isEmpty()) {   // a fresh install: offer to look at the TV and clean it
+            new Handler(Looper.getMainLooper()).post(() -> c.startActivity(new Intent(c, CleanActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+            return;
+        }
         if (!updated) return;
         new Thread(() -> {
             String notes = "";

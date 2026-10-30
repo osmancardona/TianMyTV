@@ -77,7 +77,7 @@ public class TianSettingsActivity extends Activity {
 
     private final class SettingsView extends View {
         private final float k;
-        private final String[] labels = {"Fondo de pantalla", "Tema", "Reloj", "Clima", "Ciudad", "Apagar el TV en", "Apagar cada noche a las", "Estante, botones y más", "Ajustes de Android", "Editor de pantalla", "Buscar actualización"};
+        private final String[] labels = {"Fondo de pantalla", "Tema", "Reloj", "Clima", "Ciudad", "Apagar el TV en", "Apagar cada noche a las", "Estante, botones y más", "Ajustes de Android", "Editor de pantalla", "Buscar actualización", "Limpiar y optimizar el TV"};
         private int focus;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint title = Ui.text(Ui.displaySemibold, 1, 0xFFFFFFFF), label = Ui.text(Ui.semibold, 1, 0xFFFFFFFF),
@@ -91,7 +91,7 @@ public class TianSettingsActivity extends Activity {
             k = dm.widthPixels / 1920f;
             setFocusable(true);
             title.setTextSize(54 * k);
-            label.setTextSize(32 * k);
+            label.setTextSize(30 * k);
             value.setTextSize(32 * k);
             small.setTextSize(26 * k);
             title.setTextAlign(Paint.Align.CENTER);
@@ -239,6 +239,7 @@ public class TianSettingsActivity extends Activity {
                     else if (focus == 8) open(new Intent(Settings.ACTION_SETTINGS));
                     else if (focus == 9) startActivity(new Intent(getContext(), EditorActivity.class));
                     else if (focus == 10) lookForUpdate();
+                    else if (focus == 11) startActivity(new Intent(getContext(), CleanActivity.class));
                     else change(1);
                     break;
             }
@@ -265,7 +266,7 @@ public class TianSettingsActivity extends Activity {
             c.drawText("Tian Demon TV", cx, 720 * k, title);
             c.drawText("Versión " + Updates.installedVersion(getContext()), cx, 770 * k, small);
             // on the right: the rows
-            float left = 1000 * k, right = 1800 * k, top = 56 * k, rh = 76 * k, gap = 7 * k;
+            float left = 1000 * k, right = 1800 * k, top = 44 * k, rh = 70 * k, gap = 6 * k;
             for (int i = 0; i < labels.length; i++) {
                 float y = top + i * (rh + gap);
                 r.set(left, y, right, y + rh);
