@@ -289,6 +289,11 @@ public class WallpaperActivity extends Activity {
             o.inSampleSize = Math.max(1, Math.min(bounds.outWidth / 2112, bounds.outHeight / 1188));
             Bitmap b = BitmapFactory.decodeFile(tmp.getPath(), o);
             if (b == null) return null;
+            // the screen is 16:9: cut the middle of the picture to that shape, at 1920 wide at most
+            int cw = b.getWidth(), ch = b.getHeight();
+            if (cw * 9 > ch * 16) cw = ch * 16 / 9; else ch = cw * 9 / 16;
+            b = Bitmap.createBitmap(b, (b.getWidth() - cw) / 2, (b.getHeight() - ch) / 2, cw, ch);
+            if (cw > 1920) b = Bitmap.createScaledBitmap(b, 1920, 1080, true);
             String name = "w-" + System.currentTimeMillis() + ".jpg";
             try (FileOutputStream f = new FileOutputStream(new File(dir(app), name))) {
                 b.compress(Bitmap.CompressFormat.JPEG, 90, f);
@@ -332,6 +337,10 @@ public class WallpaperActivity extends Activity {
         private final RectF r = new RectF();
         private final Matrix matrix = new Matrix();
         private Bitmap qr;
+        private final List<String> fresh = new ArrayList<>();   // pictures sent while the code was open
+        private final java.util.Map<String, Bitmap> previews = new java.util.HashMap<>();
+        private int freshIndex, freshBtn;
+        private long renderUntil;
         private String qrUrl, hint = "";
         private long holdAt;
         private Bitmap backdrop;
@@ -411,14 +420,30 @@ public class WallpaperActivity extends Activity {
             boolean dpad = code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_DPAD_UP
                     || code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
             if (page != null && code == KeyEvent.KEYCODE_BACK) {
-                if (e.getAction() == KeyEvent.ACTION_UP) {
-                    stopPage();
-                    invalidate();
-                }
+                if (e.getAction() == KeyEvent.ACTION_UP) closeCode();
                 return true;
             }
             if (!dpad) return false;
-            if (page != null) return true;   // the code is showing: only Back
+            if (page != null) {   // the code, or the pictures that came
+                if (e.getAction() != KeyEvent.ACTION_DOWN || fresh.isEmpty()) return true;
+                if (code == KeyEvent.KEYCODE_DPAD_LEFT) freshIndex = (freshIndex - 1 + fresh.size()) % fresh.size();
+                else if (code == KeyEvent.KEYCODE_DPAD_RIGHT) freshIndex = (freshIndex + 1) % fresh.size();
+                else if (code == KeyEvent.KEYCODE_DPAD_UP) freshBtn = 0;
+                else if (code == KeyEvent.KEYCODE_DPAD_DOWN) freshBtn = 1;
+                else if (e.getRepeatCount() == 0) {
+                    if (freshBtn == 0) {
+                        String id = fresh.get(freshIndex);
+                        closeCode();
+                        hint = "Aplicando...";
+                        apply(id);
+                    } else {
+                        closeCode();
+                    }
+                    return true;
+                }
+                invalidate();
+                return true;
+            }
             boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
             if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
                 if (down && e.getRepeatCount() == 0) holdAt = System.currentTimeMillis();
@@ -471,6 +496,14 @@ public class WallpaperActivity extends Activity {
             reload();
         }
 
+        /** Closes the window of the code (and of the pictures that came); the list of wallpapers stays. */
+        private void closeCode() {
+            stopPage();
+            fresh.clear();
+            previews.clear();
+            reload();
+        }
+
         private void startPage() {
             InetAddress lan = KeyPage.lanAddress(getContext());
             if (lan == null) {
@@ -482,8 +515,19 @@ public class WallpaperActivity extends Activity {
                 page = new UploadPage(getContext(), lan, new UploadPage.Listener() {
                     @Override public void added(String name) {
                         handler.post(() -> {
+                            fresh.add(name);
+                            freshIndex = fresh.size() - 1;
+                            freshBtn = 0;
+                            renderUntil = android.os.SystemClock.uptimeMillis() + 1300;
                             hint = "Foto agregada";
                             reload();
+                            worker.execute(() -> {
+                                Bitmap p = load(getContext(), name, 1000, 563);
+                                handler.post(() -> {
+                                    previews.put(name, p);
+                                    invalidate();
+                                });
+                            });
                         });
                     }
 
@@ -578,7 +622,94 @@ public class WallpaperActivity extends Activity {
             if (page != null) drawCode(c, w, h);
         }
 
+        private void drawFresh(Canvas c, int w, int h) {
+            fill.setColor(0xF2000000);
+            c.drawRect(0, 0, w, h, fill);
+            head.setTextAlign(Paint.Align.CENTER);
+            sub.setTextAlign(Paint.Align.CENTER);
+            head.setTextSize(50 * k);
+            c.drawText("Así se verá tu fondo", w / 2f, 100 * k, head);
+            head.setTextSize(58 * k);
+            float iw = 1000 * k, ih = iw * 9 / 16, x = (w - iw) / 2f, y = 140 * k;
+            r.set(x, y, x + iw, y + ih);
+            fill.setColor(0xFF1A0A10);
+            c.drawRoundRect(r, 28 * k, 28 * k, fill);
+            String id = fresh.get(freshIndex);
+            Bitmap p = previews.get(id);
+            long left = renderUntil - android.os.SystemClock.uptimeMillis();
+            if (p != null && left <= 0) {
+                BitmapShader sh = new BitmapShader(p, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                matrix.setScale(iw / p.getWidth(), ih / p.getHeight());
+                matrix.postTranslate(x, y);
+                sh.setLocalMatrix(matrix);
+                fill.setShader(sh);
+                c.drawRoundRect(r, 28 * k, 28 * k, fill);
+                fill.setShader(null);
+            } else {
+                c.drawText("Renderizando fondo…", w / 2f, y + ih / 2 - 10 * k, sub);
+                float f = Math.max(0, Math.min(1, 1 - left / 1300f));
+                fill.setColor(0x33FFFFFF);
+                r.set(x + 200 * k, y + ih / 2 + 20 * k, x + iw - 200 * k, y + ih / 2 + 32 * k);
+                c.drawRoundRect(r, 6 * k, 6 * k, fill);
+                fill.setColor(0xFFFFFFFF);
+                r.right = r.left + (iw - 400 * k) * f;
+                c.drawRoundRect(r, 6 * k, 6 * k, fill);
+                postInvalidateDelayed(40);
+            }
+            fill.setStyle(Paint.Style.STROKE);
+            fill.setStrokeWidth(4 * k);
+            fill.setColor(0x88FFFFFF);
+            r.set(x, y, x + iw, y + ih);
+            c.drawRoundRect(r, 28 * k, 28 * k, fill);
+            fill.setStyle(Paint.Style.FILL);
+            // the arrows, when more than one came
+            if (fresh.size() > 1) {
+                fill.setColor(0xFFFFFFFF);
+                float ay = y + ih / 2;
+                android.graphics.Path a = new android.graphics.Path();
+                a.moveTo(x - 30 * k, ay - 34 * k);
+                a.lineTo(x - 80 * k, ay);
+                a.lineTo(x - 30 * k, ay + 34 * k);
+                a.close();
+                c.drawPath(a, fill);
+                a.reset();
+                a.moveTo(x + iw + 30 * k, ay - 34 * k);
+                a.lineTo(x + iw + 80 * k, ay);
+                a.lineTo(x + iw + 30 * k, ay + 34 * k);
+                a.close();
+                c.drawPath(a, fill);
+                c.drawText((freshIndex + 1) + " de " + fresh.size(), w / 2f, y + ih + 50 * k, sub);
+            }
+            // the buttons
+            String[] labels = {"Usar este fondo", "Aceptar"};
+            label.setTextAlign(Paint.Align.CENTER);
+            label.setTextSize(30 * k);
+            for (int i = 0; i < 2; i++) {
+                float top = y + ih + 80 * k + i * 90 * k;
+                r.set(w / 2f - 230 * k, top, w / 2f + 230 * k, top + 72 * k);
+                boolean on = freshBtn == i;
+                fill.setColor(i == 0 ? (on ? 0xFFFF2A3A : 0xFFC4101F) : (on ? 0x66FFFFFF : 0x28FFFFFF));
+                c.drawRoundRect(r, 36 * k, 36 * k, fill);
+                if (on) {
+                    fill.setStyle(Paint.Style.STROKE);
+                    fill.setStrokeWidth(4 * k);
+                    fill.setColor(0xFFFFFFFF);
+                    c.drawRoundRect(r, 36 * k, 36 * k, fill);
+                    fill.setStyle(Paint.Style.FILL);
+                }
+                c.drawText(labels[i], w / 2f, top + 48 * k, label);
+            }
+            label.setTextSize(26 * k);
+            label.setTextAlign(Paint.Align.LEFT);
+            head.setTextAlign(Paint.Align.LEFT);
+            sub.setTextAlign(Paint.Align.LEFT);
+        }
+
         private void drawCode(Canvas c, int w, int h) {
+            if (!fresh.isEmpty()) {
+                drawFresh(c, w, h);
+                return;
+            }
             fill.setColor(0xE8000000);
             c.drawRect(0, 0, w, h, fill);
             float s = 460 * k, x = w / 2f - s - 40 * k, y = h / 2f - s / 2;

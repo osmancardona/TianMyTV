@@ -10,7 +10,7 @@ import android.view.KeyEvent;
  * title on screen in its app.
  */
 public class Screensaver extends DreamService {
-    private DreamView view;
+    private TianDreamView view;
 
     @Override public void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -19,7 +19,7 @@ public class Screensaver extends DreamService {
         setInteractive(Prefs.saverWatch());   // interactive: the keys come here instead of waking the TV
         setFullscreen(true);
         setScreenBright(true);
-        view = new DreamView(this);
+        view = new TianDreamView(this);
         setContentView(view);
     }
 
