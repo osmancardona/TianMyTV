@@ -52,7 +52,7 @@ public class UpdateActivity extends Activity {
                 Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
                 if (confirm != null) {
                     state = 2;
-                    message = "Confirma la instalación en la pantalla";
+                    message = "Confirma en la pantalla. Si el TV pide permiso para instalar apps, actívalo una sola vez y vuelve a pulsar Actualizar.";
                     startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 }
             } else if (status != PackageInstaller.STATUS_SUCCESS) {
@@ -286,7 +286,15 @@ public class UpdateActivity extends Activity {
             }
             if (state == 2 || state == 3) {
                 body.setColor(state == 3 ? 0xFFFF8A90 : 0xFFFFFFFF);
-                c.drawText(message, cx, by + 40 * k, body);
+                String m1 = message, m2 = "";
+                int cut = body.breakText(m1, true, card.width() - 80 * k, null);
+                if (cut < m1.length()) {
+                    int sp = m1.lastIndexOf(' ', cut);
+                    m2 = m1.substring(sp + 1);
+                    m1 = m1.substring(0, sp);
+                }
+                c.drawText(m1, cx, by + 40 * k, body);
+                if (!m2.isEmpty()) c.drawText(m2, cx, by + 82 * k, body);
                 body.setColor(0xCCFFFFFF);
                 if (state == 2) return;
             }
