@@ -102,7 +102,7 @@ public class SleepOverlay extends Service {
                 return;
             }
             long left = endsAt - now;
-            if (daily && left > 300_000) {   // the nightly one speaks up 5 minutes before
+            if (left > 300_000) {   // both timers speak up only in their last 5 minutes
                 view.setVisibility(android.view.View.GONE);
                 handler.postDelayed(this, 1000);
                 return;
