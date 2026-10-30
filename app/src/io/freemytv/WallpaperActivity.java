@@ -2,6 +2,7 @@ package io.freemytv;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -89,13 +90,13 @@ public class WallpaperActivity extends Activity {
         }
     }
 
-    private static File dir(Context c) {
+    static File dir(Context c) {
         File d = new File(c.getFilesDir(), "wallpapers");
         d.mkdirs();
         return d;
     }
 
-    private static SharedPreferences prefs(Context c) {
+    static SharedPreferences prefs(Context c) {
         return c.getSharedPreferences("tian", Context.MODE_PRIVATE);
     }
 
@@ -310,6 +311,28 @@ public class WallpaperActivity extends Activity {
     }
 
     /** Puts it behind the home screen: the home's own photo, one only. */
+    /** Puts wallpaper `id` behind the home screen (off the main thread): the home's own photo, one only. */
+    static void applyFile(Context app, String id) {
+        Bitmap b = load(app, id, 2112, 1188);
+        if (b == null) return;
+        Photos.removeAll(app);
+        File in = Photos.privateInbox(app);
+        in.mkdirs();
+        try (FileOutputStream f = new FileOutputStream(new File(in, "wallpaper.jpg"))) {
+            b.compress(Bitmap.CompressFormat.JPEG, 97, f);
+        } catch (IOException e) {
+            AppLog.w("wallpaper: " + e.getMessage());
+            return;
+        }
+        prefs(app).edit().putString("wallpaper", id).apply();
+        Prefs.setPhotos(true);
+        Photos.importInbox(app, () -> {
+            Prefs.setPhotos(true);
+            Runnable hook = Photos.photosHook;
+            if (hook != null) hook.run();   // the home screen takes it at once
+        });
+    }
+
     private void apply(String id) {
         final Context app = getApplicationContext();
         worker.execute(() -> {
@@ -547,7 +570,7 @@ public class WallpaperActivity extends Activity {
         private final float k;
         private final List<String> ids = new ArrayList<>();   // "+" is index 0
         private final List<Bitmap> thumbs = new ArrayList<>();
-        private int focus = 0, scroll;
+        private int focus = 1, scroll;
         private String current;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint head = Ui.text(Ui.displaySemibold, 1, 0xFFFFFFFF), sub = Ui.text(Ui.medium, 1, 0xB3FFFFFF),
@@ -587,6 +610,8 @@ public class WallpaperActivity extends Activity {
         private void reload() {
             ids.clear();
             thumbs.clear();
+            ids.add("search");
+            thumbs.add(null);
             for (String n : BUILT_IN) {
                 ids.add("builtin:" + n);
                 thumbs.add(null);
@@ -608,6 +633,7 @@ public class WallpaperActivity extends Activity {
             for (int i = 0; i < ids.size(); i++) {
                 final int index = i;
                 final String id = ids.get(i);
+                if (id.equals("search")) continue;
                 worker.execute(() -> {
                     Bitmap t = load(getContext(), id, 480, 270);
                     handler.post(() -> {
@@ -707,8 +733,8 @@ public class WallpaperActivity extends Activity {
 
         private void choose() {
             String id = ids.get(focus);
-            if (id.equals("+")) {
-                startPage();
+            if (id.equals("search")) {
+                startActivity(new Intent(getContext(), WallBrowseActivity.class));
                 return;
             }
             hint = "Aplicando...";
@@ -718,7 +744,7 @@ public class WallpaperActivity extends Activity {
 
         private void remove() {
             String id = ids.get(focus);
-            if (id.equals("+") || id.startsWith("builtin:")) {
+            if (id.equals("search") || id.startsWith("builtin:")) {
                 hint = "Ese fondo viene con la app y no se borra";
                 invalidate();
                 return;
@@ -845,7 +871,7 @@ public class WallpaperActivity extends Activity {
                     r.set(x, y, x + cw, y + ch);
                     boolean on = i == focus;
                     String id = ids.get(i);
-                    if (id.equals("+")) {
+                    if (id.equals("search")) {
                         fill.setColor(0x33FFFFFF);
                         c.drawRoundRect(r, 24 * k, 24 * k, fill);
                         fill.setStyle(Paint.Style.STROKE);
@@ -855,11 +881,11 @@ public class WallpaperActivity extends Activity {
                         fill.setColor(0xFFFFFFFF);
                         fill.setStrokeWidth(6 * k);
                         fill.setStrokeCap(Paint.Cap.ROUND);
-                        c.drawLine(r.centerX() - 24 * k, r.centerY() - 10 * k, r.centerX() + 24 * k, r.centerY() - 10 * k, fill);
-                        c.drawLine(r.centerX(), r.centerY() - 34 * k, r.centerX(), r.centerY() + 14 * k, fill);
+                        c.drawCircle(r.centerX() - 6 * k, r.centerY() - 18 * k, 22 * k, fill);
+                        c.drawLine(r.centerX() + 10 * k, r.centerY() - 2 * k, r.centerX() + 28 * k, r.centerY() + 16 * k, fill);
                         fill.setStyle(Paint.Style.FILL);
                         label.setTextAlign(Paint.Align.CENTER);
-                        c.drawText("Agregar desde el celular", r.centerX(), r.centerY() + 56 * k, label);
+                        c.drawText("Buscar fondos en línea", r.centerX(), r.centerY() + 56 * k, label);
                         label.setTextAlign(Paint.Align.LEFT);
                     } else {
                         Bitmap t = thumbs.get(i);
@@ -882,7 +908,7 @@ public class WallpaperActivity extends Activity {
                             c.drawText("En uso", x + cw - 67 * k, y + 42 * k, label);
                             label.setTextAlign(Paint.Align.LEFT);
                         }
-                        String name = id.startsWith("builtin:") ? id.substring(8) : "Mi foto";
+                        String name = id.startsWith("builtin:") ? id.substring(8) : id.startsWith("w-wh-") ? "Descargado" : "Mi foto";
                         c.drawText(name, x + 6 * k, y + ch + 34 * k, label);
                     }
                     if (on) {
