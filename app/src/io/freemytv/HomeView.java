@@ -615,6 +615,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data = HomeData.get(a);
         recs = Recs.get(a);
         playing = new NowPlaying.Watch(a, this::onPlaying);
+        Photos.photosHook = () -> handler.post(ownReady);
         cardTitleP.setColor(0xFFFFFFFF);
         cardArtistP.setColor(0xB3FFFFFF);
         click = new Click(a);

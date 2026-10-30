@@ -151,6 +151,8 @@ public class WallpaperActivity extends Activity {
             Prefs.setPhotos(true);
             Photos.importInbox(app, () -> {
                 Prefs.setPhotos(true);
+                Runnable hook = Photos.photosHook;
+                if (hook != null) hook.run();   // the home screen takes it at once
                 view.invalidate();
             });
             handler.post(() -> view.setCurrent(id));
@@ -289,11 +291,27 @@ public class WallpaperActivity extends Activity {
             o.inSampleSize = Math.max(1, Math.min(bounds.outWidth / 2112, bounds.outHeight / 1188));
             Bitmap b = BitmapFactory.decodeFile(tmp.getPath(), o);
             if (b == null) return null;
-            // the screen is 16:9: cut the middle of the picture to that shape, at 1920 wide at most
-            int cw = b.getWidth(), ch = b.getHeight();
-            if (cw * 9 > ch * 16) cw = ch * 16 / 9; else ch = cw * 9 / 16;
-            b = Bitmap.createBitmap(b, (b.getWidth() - cw) / 2, (b.getHeight() - ch) / 2, cw, ch);
-            if (cw > 1920) b = Bitmap.createScaledBitmap(b, 1920, 1080, true);
+            // the screen is 16:9: a picture of that shape fills it; any other is kept whole, over a soft dark copy of itself
+            Bitmap screen = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888);
+            Canvas sc = new Canvas(screen);
+            Paint sp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+            float ratio = b.getWidth() / (float) b.getHeight();
+            RectF dst = new RectF(0, 0, 1920, 1080);
+            if (Math.abs(ratio - 16f / 9) < 0.05f) {
+                sc.drawBitmap(b, null, dst, sp);
+            } else {
+                Bitmap tiny = Bitmap.createScaledBitmap(b, 32, Math.max(1, Math.round(32 / ratio)), true);
+                float cover = Math.max(1920f / tiny.getWidth(), 1080f / tiny.getHeight());
+                float cw = tiny.getWidth() * cover, chh = tiny.getHeight() * cover;
+                sc.drawBitmap(tiny, null, new RectF((1920 - cw) / 2, (1080 - chh) / 2, (1920 + cw) / 2, (1080 + chh) / 2), sp);
+                sp.setColor(0x88000000);
+                sc.drawRect(dst, sp);
+                sp.setColor(0xFFFFFFFF);
+                float fit = Math.min(1920f / b.getWidth(), 1080f / b.getHeight());
+                float fw = b.getWidth() * fit, fh = b.getHeight() * fit;
+                sc.drawBitmap(b, null, new RectF((1920 - fw) / 2, (1080 - fh) / 2, (1920 + fw) / 2, (1080 + fh) / 2), sp);
+            }
+            b = screen;
             String name = "w-" + System.currentTimeMillis() + ".jpg";
             try (FileOutputStream f = new FileOutputStream(new File(dir(app), name))) {
                 b.compress(Bitmap.CompressFormat.JPEG, 90, f);
@@ -426,19 +444,14 @@ public class WallpaperActivity extends Activity {
             if (!dpad) return false;
             if (page != null) {   // the code, or the pictures that came
                 if (e.getAction() != KeyEvent.ACTION_DOWN || fresh.isEmpty()) return true;
-                if (code == KeyEvent.KEYCODE_DPAD_LEFT) freshIndex = (freshIndex - 1 + fresh.size()) % fresh.size();
-                else if (code == KeyEvent.KEYCODE_DPAD_RIGHT) freshIndex = (freshIndex + 1) % fresh.size();
-                else if (code == KeyEvent.KEYCODE_DPAD_UP) freshBtn = 0;
-                else if (code == KeyEvent.KEYCODE_DPAD_DOWN) freshBtn = 1;
-                else if (e.getRepeatCount() == 0) {
-                    if (freshBtn == 0) {
-                        String id = fresh.get(freshIndex);
-                        closeCode();
-                        hint = "Aplicando...";
-                        apply(id);
-                    } else {
-                        closeCode();
-                    }
+                if (code == KeyEvent.KEYCODE_DPAD_LEFT && fresh.size() > 1) {
+                    freshIndex = (freshIndex - 1 + fresh.size()) % fresh.size();
+                    apply(fresh.get(freshIndex));
+                } else if (code == KeyEvent.KEYCODE_DPAD_RIGHT && fresh.size() > 1) {
+                    freshIndex = (freshIndex + 1) % fresh.size();
+                    apply(fresh.get(freshIndex));
+                } else if ((code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) && e.getRepeatCount() == 0) {
+                    closeCode();
                     return true;
                 }
                 invalidate();
@@ -518,7 +531,8 @@ public class WallpaperActivity extends Activity {
                             fresh.add(name);
                             freshIndex = fresh.size() - 1;
                             freshBtn = 0;
-                            renderUntil = android.os.SystemClock.uptimeMillis() + 1300;
+                            renderUntil = android.os.SystemClock.uptimeMillis() + 700;
+                            apply(name);
                             hint = "Foto agregada";
                             reload();
                             worker.execute(() -> {
@@ -628,7 +642,7 @@ public class WallpaperActivity extends Activity {
             head.setTextAlign(Paint.Align.CENTER);
             sub.setTextAlign(Paint.Align.CENTER);
             head.setTextSize(50 * k);
-            c.drawText("Así se verá tu fondo", w / 2f, 100 * k, head);
+            c.drawText("Ya es tu fondo", w / 2f, 100 * k, head);
             head.setTextSize(58 * k);
             float iw = 1000 * k, ih = iw * 9 / 16, x = (w - iw) / 2f, y = 140 * k;
             r.set(x, y, x + iw, y + ih);
@@ -647,7 +661,7 @@ public class WallpaperActivity extends Activity {
                 fill.setShader(null);
             } else {
                 c.drawText("Renderizando fondo…", w / 2f, y + ih / 2 - 10 * k, sub);
-                float f = Math.max(0, Math.min(1, 1 - left / 1300f));
+                float f = Math.max(0, Math.min(1, 1 - left / 700f));
                 fill.setColor(0x33FFFFFF);
                 r.set(x + 200 * k, y + ih / 2 + 20 * k, x + iw - 200 * k, y + ih / 2 + 32 * k);
                 c.drawRoundRect(r, 6 * k, 6 * k, fill);
@@ -681,14 +695,14 @@ public class WallpaperActivity extends Activity {
                 c.drawText((freshIndex + 1) + " de " + fresh.size(), w / 2f, y + ih + 50 * k, sub);
             }
             // the buttons
-            String[] labels = {"Usar este fondo", "Aceptar"};
+            String[] labels = {"Aceptar"};
             label.setTextAlign(Paint.Align.CENTER);
             label.setTextSize(30 * k);
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 1; i++) {
                 float top = y + ih + 80 * k + i * 90 * k;
                 r.set(w / 2f - 230 * k, top, w / 2f + 230 * k, top + 72 * k);
-                boolean on = freshBtn == i;
-                fill.setColor(i == 0 ? (on ? 0xFFFF2A3A : 0xFFC4101F) : (on ? 0x66FFFFFF : 0x28FFFFFF));
+                boolean on = true;
+                fill.setColor(0xFFFF2A3A);
                 c.drawRoundRect(r, 36 * k, 36 * k, fill);
                 if (on) {
                     fill.setStyle(Paint.Style.STROKE);

@@ -38,6 +38,8 @@ final class Photos {
 
     /** The screensaver's photo size (DreamView loads them 10% larger than the screen, for the slow zoom). */
     static final int W = 2112, H = 1188;
+    /** Set by the home screen: tells it a new wallpaper came in (the editor of wallpapers runs in the same process). */
+    static volatile Runnable photosHook;
     /** At most this many (about 300 KB each); later ones wait in the folder until some are removed. */
     static final int MAX = 100;
     /** Smaller ones are icons and thumbnails, not photos. */
