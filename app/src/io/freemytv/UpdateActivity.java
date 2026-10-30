@@ -238,6 +238,7 @@ public class UpdateActivity extends Activity {
                 c.drawRoundRect(card, 52 * k, 52 * k, fill);
             }
             fill.setStyle(Paint.Style.FILL);
+            fill.setColor(0xFF000000);
             fill.setShader(new LinearGradient(0, card.top, 0, card.bottom, 0xFF3A0C16, 0xFF0A0306, Shader.TileMode.CLAMP));
             c.drawRoundRect(card, 52 * k, 52 * k, fill);
             fill.setShader(null);
@@ -270,7 +271,7 @@ public class UpdateActivity extends Activity {
                     if (++shown == 4) break;
                 }
             }
-            float by = card.bottom - 240 * k;
+            float by = card.bottom - 290 * k;
             if (state == 1) {
                 body.setColor(0xFFFFFFFF);
                 c.drawText("Descargando… " + Math.round(progress * 100) + "%", cx, by + 20 * k, body);
