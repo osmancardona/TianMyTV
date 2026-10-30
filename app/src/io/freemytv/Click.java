@@ -34,7 +34,7 @@ final class Click {
             pool = new SoundPool.Builder().setMaxStreams(3).setAudioAttributes(new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build();
-            move = pool.load(bubble(c, "bubble-move.wav", 0.13f), 1);
+            move = pool.load(fromAsset(c, "bubble-pop.wav"), 1);
             open = pool.load(wav(c, "click-open.wav", 880f, 0.022f, 0.090f), 1);
         } catch (IOException | RuntimeException e) {
             AppLog.w("click sound unavailable: " + e.getMessage());
@@ -46,7 +46,7 @@ final class Click {
         if (pool == null || !Prefs.sounds()) return;
         handler.post(() -> {
             SoundPool p = pool;
-            if (p != null) p.play(move, 0.32f, 0.32f, 1, 0, 1f);
+            if (p != null) p.play(move, 0.6f, 0.6f, 1, 0, 1f);
         });
     }
 
@@ -63,6 +63,17 @@ final class Click {
         pool = null;
         if (p != null) handler.post(p::release);   // after the plays already queued, never during one
         thread.quitSafely();
+    }
+
+    /** The bubble pop (assets/sounds), copied once to the cache where SoundPool can read it. */
+    private static String fromAsset(Context c, String name) throws IOException {
+        File f = new File(c.getCacheDir(), "v2-" + name);
+        if (f.exists() && f.length() > 44) return f.getPath();
+        try (java.io.InputStream in = c.getAssets().open("sounds/" + name); FileOutputStream out = new FileOutputStream(f)) {
+            byte[] buf = new byte[8192];
+            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+        }
+        return f.getPath();
     }
 
     /** A bubble: a soft tone that slides quickly up in pitch and fades, like a drop popping in water. */

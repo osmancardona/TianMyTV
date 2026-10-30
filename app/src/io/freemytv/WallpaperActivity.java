@@ -247,7 +247,7 @@ public class WallpaperActivity extends Activity {
     /**
      * Draws wallpaper `id` (w-....jpg) for the screen from its original (o-w-....jpg), 2112 by 1188. mode 0 fills the
      * screen with the best part of the picture (`offset` says where, found by smartOffset); mode 1 shows it whole in the
-     * middle, with mirrored copies of it on its sides, so there are no empty strips.
+     * middle, over a soft blurred copy of itself that fills the rest.
      */
     static boolean render(Context c, String id, int mode, float offset) {
         Bitmap b = BitmapFactory.decodeFile(new File(dir(c), "o-" + id).getPath());
@@ -267,20 +267,32 @@ public class WallpaperActivity extends Activity {
             sc.drawBitmap(scaleTo(part, tw, th), null, dst, sp);
             if (scale > 1.3f) sharpened(screen, Math.min(0.9f, 0.35f + 0.15f * scale));
         } else {
+            // behind: the same picture zoomed to fill the screen, softly blurred and a little darker, so the colours match
+            float cover = Math.max(tw / (float) b.getWidth(), th / (float) b.getHeight());
+            int cw = Math.min(b.getWidth(), Math.round(tw / cover)), ch = Math.min(b.getHeight(), Math.round(th / cover));
+            Bitmap mid = Bitmap.createBitmap(b, (b.getWidth() - cw) / 2, (b.getHeight() - ch) / 2, cw, ch);
+            Bitmap haze = blurred(scaleTo(mid, 528, 297), 18);
+            sc.drawBitmap(Bitmap.createScaledBitmap(haze, tw, th, true), null, dst, sp);
+            sp.setColor(0x40000000);
+            sc.drawRect(dst, sp);
+            sp.setColor(0xFFFFFFFF);
+            // in front: the whole picture, sharp, its open sides melting into the haze
             float fit = Math.min(tw / (float) b.getWidth(), th / (float) b.getHeight());
             int fw = Math.max(1, Math.round(b.getWidth() * fit)), fh = Math.max(1, Math.round(b.getHeight() * fit));
             Bitmap whole = scaleTo(b, fw, fh);
             float fx = (tw - fw) / 2f, fy = (th - fh) / 2f;
-            int nx = fw < tw ? (int) Math.ceil(fx / fw) + 1 : 0, ny = fh < th ? (int) Math.ceil(fy / fh) + 1 : 0;
-            for (int ix = -nx; ix <= nx; ix++) {
-                for (int iy = -ny; iy <= ny; iy++) {
-                    float x = fx + ix * fw, y = fy + iy * fh;
-                    sc.save();
-                    sc.scale((ix & 1) != 0 ? -1 : 1, (iy & 1) != 0 ? -1 : 1, x + fw / 2f, y + fh / 2f);
-                    sc.drawBitmap(whole, x, y, sp);
-                    sc.restore();
-                }
-            }
+            boolean sides = fw < tw - 2;
+            float len = sides ? fw : fh, soft = Math.max(1, len * 0.14f);
+            int layer = sc.saveLayer(fx, fy, fx + fw, fy + fh, null);
+            sc.drawBitmap(whole, fx, fy, sp);
+            Paint mask = new Paint();
+            int[] ramp = {0x00000000, 0xFF000000, 0xFF000000, 0x00000000};
+            float[] pos = {0f, soft / len, 1f - soft / len, 1f};
+            mask.setShader(sides ? new android.graphics.LinearGradient(fx, 0, fx + fw, 0, ramp, pos, Shader.TileMode.CLAMP)
+                    : new android.graphics.LinearGradient(0, fy, 0, fy + fh, ramp, pos, Shader.TileMode.CLAMP));
+            mask.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
+            if (fw < tw - 2 || fh < th - 2) sc.drawRect(fx, fy, fx + fw, fy + fh, mask);
+            sc.restoreToCount(layer);
         }
         try (FileOutputStream f = new FileOutputStream(new File(dir(c), id))) {
             screen.compress(Bitmap.CompressFormat.JPEG, 97, f);
