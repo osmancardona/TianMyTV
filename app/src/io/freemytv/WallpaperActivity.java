@@ -45,7 +45,7 @@ import java.util.concurrent.Executors;
  * phone sends the pictures over the Wi-Fi). OK picks one, hold OK removes one you added.
  */
 public class WallpaperActivity extends Activity {
-    private static final String[] BUILT_IN = {"Alastor", "Crimson", "Midnight", "Ember"};
+    private static final String[] BUILT_IN = {"Alastor", "Emblema TIAN", "Luna de Sangre", "Humo Carmesi", "Brasas", "Medianoche"};
 
     private static final java.util.Map<String, Float> SMART = new java.util.concurrent.ConcurrentHashMap<>();
     private WallView view;
@@ -111,13 +111,20 @@ public class WallpaperActivity extends Activity {
                         return BitmapFactory.decodeStream(in, null, o);
                     }
                 }
-                int[] colors = name.equals("Crimson") ? new int[] {0xFF5A0610, 0xFF12020A}
-                        : name.equals("Midnight") ? new int[] {0xFF1B2250, 0xFF05060F} : new int[] {0xFFB5320A, 0xFF1C0504};
-                Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                Paint p = new Paint();
-                p.setShader(new LinearGradient(0, 0, w * 0.6f, h, colors[0], colors[1], Shader.TileMode.CLAMP));
-                new Canvas(b).drawRect(0, 0, w, h, p);
-                return b;
+                if (w >= 1500) {   // the screen's size: made once, kept
+                    File kept = new File(c.getCacheDir(), "wall-" + name.replace(' ', '-') + ".jpg");
+                    if (kept.isFile()) {
+                        Bitmap k = BitmapFactory.decodeFile(kept.getPath());
+                        if (k != null) return k;
+                    }
+                    Bitmap made = WallGen.make(c, name, w, h);
+                    try (FileOutputStream out = new FileOutputStream(kept)) {
+                        made.compress(Bitmap.CompressFormat.JPEG, 96, out);
+                    } catch (IOException ignored) {
+                    }
+                    return made;
+                }
+                return WallGen.make(c, name, w, h);
             }
             File f = new File(dir(c), id);
             BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -540,7 +547,7 @@ public class WallpaperActivity extends Activity {
         private final float k;
         private final List<String> ids = new ArrayList<>();   // "+" is index 0
         private final List<Bitmap> thumbs = new ArrayList<>();
-        private int focus = 1, scroll;
+        private int focus = 0, scroll;
         private String current;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint head = Ui.text(Ui.displaySemibold, 1, 0xFFFFFFFF), sub = Ui.text(Ui.medium, 1, 0xB3FFFFFF),
@@ -580,8 +587,6 @@ public class WallpaperActivity extends Activity {
         private void reload() {
             ids.clear();
             thumbs.clear();
-            ids.add("+");
-            thumbs.add(null);
             for (String n : BUILT_IN) {
                 ids.add("builtin:" + n);
                 thumbs.add(null);
@@ -600,7 +605,7 @@ public class WallpaperActivity extends Activity {
             }
             if (focus >= ids.size()) focus = ids.size() - 1;
             loadBackdrop();
-            for (int i = 1; i < ids.size(); i++) {
+            for (int i = 0; i < ids.size(); i++) {
                 final int index = i;
                 final String id = ids.get(i);
                 worker.execute(() -> {
@@ -829,7 +834,7 @@ public class WallpaperActivity extends Activity {
             c.drawRect(0, 0, w, h, fill);
             c.drawText("Fondo de pantalla", 110 * k, 130 * k, head);
             sub.setTextAlign(Paint.Align.LEFT);
-            c.drawText(hint.isEmpty() ? "OK elige el fondo. Mantén OK para borrar uno tuyo." : hint, 110 * k, 180 * k, sub);
+            c.drawText(hint.isEmpty() ? "Elige un fondo y pulsa OK: se pone al instante." : hint, 110 * k, 180 * k, sub);
 
             float cw = 380 * k, ch = 214 * k, gap = 36 * k, left = 110 * k, top = 250 * k;
             for (int row = 0; row < ROWS; row++) {

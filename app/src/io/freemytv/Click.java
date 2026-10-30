@@ -32,7 +32,7 @@ final class Click {
         handler = new Handler(thread.getLooper());
         try {
             pool = new SoundPool.Builder().setMaxStreams(3).setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build();
             move = pool.load(fromAsset(c, "bubble-pop.wav"), 1);
             open = pool.load(wav(c, "click-open.wav", 880f, 0.022f, 0.090f), 1);
