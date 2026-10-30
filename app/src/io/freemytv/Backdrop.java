@@ -102,10 +102,12 @@ final class Backdrop {
             int[] night = darken(frost.clone(), 0.76f);
             int[] nightGlass = darken(glass, 0.56f);
             if (own) {
-                int[] sharp = reduce(out, GW, GH, 1, 1);
-                int[] lightBg = ramp(sharp.clone(), 0.82f, 0.45f, true), nightBg = ramp(sharp, 0.76f, 0.5f, false);
+                // Your photo is the background itself, at 1280 by 720 (it was 480 by 270, four times too small), only
+                // darkened where the text is, and nearly as it is on the right.
+                int[] sharp = reduce(out, OWN_W, OWN_H, 0, 0);
+                int[] lightBg = ramp(sharp.clone(), 0.80f, 0.22f, true, OWN_W, OWN_H), nightBg = ramp(sharp, 0.62f, 0.08f, false, OWN_W, OWN_H);
                 out.recycle();
-                return new Backdrop(null, frost, null, wide, light, lightGlass, night, nightGlass, lightBg, nightBg, GW, GH);
+                return new Backdrop(null, frost, null, wide, light, lightGlass, night, nightGlass, lightBg, nightBg, OWN_W, OWN_H);
             }
             out.recycle();
             return new Backdrop(null, frost, null, wide, light, lightGlass, night, nightGlass);
@@ -230,14 +232,16 @@ final class Backdrop {
     }
 
     /** Whitens (or darkens) by `left` up to 45% of the width, easing to `right` by 70% (a GW × GH image). */
-    private static int[] ramp(int[] px, float left, float right, boolean light) {
-        int[] col = new int[GH];
-        for (int x = 0; x < GW; x++) {
-            float t = Math.max(0, Math.min(1, (x / (float) GW - 0.45f) / 0.25f));
+    private static final int OWN_W = 1280, OWN_H = 720;
+
+    private static int[] ramp(int[] px, float left, float right, boolean light, int w, int h) {
+        int[] col = new int[h];
+        for (int x = 0; x < w; x++) {
+            float t = Math.max(0, Math.min(1, (x / (float) w - 0.45f) / 0.25f));
             float a = left + (right - left) * t * t * (3 - 2 * t);
-            for (int y = 0; y < GH; y++) col[y] = px[y * GW + x];
+            for (int y = 0; y < h; y++) col[y] = px[y * w + x];
             if (light) whiten(col, a); else darken(col, a);
-            for (int y = 0; y < GH; y++) px[y * GW + x] = col[y];
+            for (int y = 0; y < h; y++) px[y * w + x] = col[y];
         }
         return px;
     }

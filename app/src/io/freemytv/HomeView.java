@@ -2095,7 +2095,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float l = i == liftIndex ? Math.max(0, moveLift.value) : 0;
         float f = tileFocus[i].value, fc = Ui.clamp(f), s = 1 + FOCUS_GROW * f + LIFT_GROW * l;
         RectF base = tileRects[i];
-        float bw = base.width(), bh = base.height(), r0 = bw * 0.2237f;
+        float bw = base.width(), bh = base.height(), r0 = bw / 2;   // round icons
         float cx = base.centerX(), cy = base.centerY();
         cell.set(cx - bw * s / 2, cy - bh * s / 2, cx + bw * s / 2, cy + bh * s / 2);
         float r = r0 * s;

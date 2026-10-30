@@ -34,7 +34,7 @@ final class Click {
             pool = new SoundPool.Builder().setMaxStreams(3).setAudioAttributes(new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build();
-            move = pool.load(wav(c, "click-move.wav", 1450f, 0.009f, 0.030f), 1);
+            move = pool.load(bubble(c, "bubble-move.wav", 0.13f), 1);
             open = pool.load(wav(c, "click-open.wav", 880f, 0.022f, 0.090f), 1);
         } catch (IOException | RuntimeException e) {
             AppLog.w("click sound unavailable: " + e.getMessage());
@@ -46,7 +46,7 @@ final class Click {
         if (pool == null || !Prefs.sounds()) return;
         handler.post(() -> {
             SoundPool p = pool;
-            if (p != null) p.play(move, 0.14f, 0.14f, 1, 0, 1f);
+            if (p != null) p.play(move, 0.32f, 0.32f, 1, 0, 1f);
         });
     }
 
@@ -63,6 +63,31 @@ final class Click {
         pool = null;
         if (p != null) handler.post(p::release);   // after the plays already queued, never during one
         thread.quitSafely();
+    }
+
+    /** A bubble: a soft tone that slides quickly up in pitch and fades, like a drop popping in water. */
+    private static String bubble(Context c, String name, float seconds) throws IOException {
+        File f = new File(c.getCacheDir(), name);
+        if (f.exists() && f.length() > 44) return f.getPath();
+        int n = Math.round(RATE * seconds);
+        ByteBuffer b = ByteBuffer.allocate(44 + n * 2).order(ByteOrder.LITTLE_ENDIAN);
+        b.put("RIFF".getBytes("US-ASCII")).putInt(36 + n * 2).put("WAVE".getBytes("US-ASCII"));
+        b.put("fmt ".getBytes("US-ASCII")).putInt(16).putShort((short) 1).putShort((short) 1)
+                .putInt(RATE).putInt(RATE * 2).putShort((short) 2).putShort((short) 16);
+        b.put("data".getBytes("US-ASCII")).putInt(n * 2);
+        double phase = 0;
+        for (int i = 0; i < n; i++) {
+            double t = (double) i / RATE;
+            double freq = 520 + 1100 * (1 - Math.exp(-t / 0.022));   // 520 Hz up to about 1600 Hz
+            phase += 2 * Math.PI * freq / RATE;
+            double env = Math.min(1, t / 0.004) * Math.exp(-t / 0.032);
+            double s = 0.85 * Math.sin(phase) + 0.15 * Math.sin(phase * 2);
+            b.putShort((short) Math.round(s * env * 0.8 * Short.MAX_VALUE));
+        }
+        try (FileOutputStream out = new FileOutputStream(f)) {
+            out.write(b.array());
+        }
+        return f.getPath();
     }
 
     /** Sine wave plus one harmonic, 1.5 ms attack (no pop) and exponential decay. */
