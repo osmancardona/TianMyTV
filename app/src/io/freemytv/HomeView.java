@@ -121,7 +121,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
     private static final float L_TITLE_BASE = 130, L_TABBAR_TOP = 158, L_TABBAR_H = 68, L_CARDS_TOP = 262, L_CARD_H = 442;
-    private static final float WATCH_GAP = 40;
+    private static final float WATCH_GAP = 40, ROW_W = 300, ROW_GAP = 28, WROW_TOP = 470;
     private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103;
     private static final float L_STATUS = 25, L_STATUS_GAP = 22;
     private static final String[] STATUS_SYMBOLS = {"wifi", "ethernet", "bluetooth", "usb"};
@@ -616,6 +616,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         recs = Recs.get(a);
         playing = new NowPlaying.Watch(a, this::onPlaying);
         Photos.photosHook = () -> handler.post(ownReady);
+        Recent.start(getContext());
         cardTitleP.setColor(0xFFFFFFFF);
         cardArtistP.setColor(0xB3FFFFFF);
         click = new Click(a);
@@ -1810,7 +1811,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Moves in the music pill (zone Z_MEDIA): mediaIndex 3 is the pill, 0 to 2 the buttons under it once opened. */
     private boolean moveMedia(int dx, int dy) {
-        if (zone == Z_SHELF && dy < 0 && mediaOn()) {
+        if (zone == Z_SHELF && dy < 0 && mediaOn() && watching.isEmpty()) {
             zone = Z_MEDIA;
             mediaIndex = mediaOpen ? 1 : 3;
         } else if (zone != Z_MEDIA) {
@@ -1820,7 +1821,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (mediaOpen) {
                     mediaIndex = 1;
                 } else {
-                    zone = Z_SHELF;
+                    zone = watching.isEmpty() ? Z_SHELF : Z_WATCH;
                 }
             } else if ((dy < 0 || dx > 0) && !lightButtons.isEmpty()) {
                 zone = Z_TOP;
@@ -2888,7 +2889,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // Only read when it's shown: with the picks or the clock, Continue Watching costs nothing.
             final String mode = Prefs.topContent();
             final boolean allowed = WatchNext.allowed(c);
-            final List<WatchNext.Item> w = mode.equals(Prefs.TOP_CONTINUE) ? WatchNext.load(c) : new ArrayList<>();
+            final List<WatchNext.Item> w = mode.equals(Prefs.TOP_CONTINUE) ? WatchNext.load(c)
+                    : mode.equals(Prefs.TOP_PICKS) ? new ArrayList<>() : Recent.load(c);
             handler.post(() -> {
                 if (top != null) setLightButtons(top);
                 setTopContent(mode, w, allowed);
@@ -3164,7 +3166,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The Continue Watching card under a point, if any (only the ones on screen; `still` as in cardAt). */
     private int watchAt(float x, float y, boolean still) {
-        if (!continueMode()) return -1;
+        if (watching.isEmpty()) return -1;
         for (int i = 0; i < watching.size(); i++) {
             watchRect(i, hitBox);
             if (hitBox.left > w || hitBox.right <= watchLeftEdge()) continue;
@@ -3818,7 +3820,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         for (int i = picksMode() ? 0 : 3; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
         for (int i = 0; i < Math.min(Recs.MAX_CARDS, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
-        if (continueMode()) for (int i = 0; i < watching.size(); i++) out.add(a11yId(Z_WATCH, i));
+        for (int i = 0; i < watching.size(); i++) out.add(a11yId(Z_WATCH, i));
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
         if (drawerOpen && Prefs.weather()) out.add(a11yId(WIDGETS, 0));
@@ -4219,6 +4221,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** What the top shows now (from reload, off the main thread) and, for Continue Watching, its list. */
     private void setTopContent(String mode, List<WatchNext.Item> list, boolean allowed) {
+        if (mode.equals(Prefs.TOP_PICKS) && picksOn()) list = new ArrayList<>();
         if (!hiddenNow.isEmpty()) {
             List<WatchNext.Item> shown = new ArrayList<>(list.size());
             for (WatchNext.Item it : list) if (!hiddenNow.contains(WatchNext.hideKey(it))) shown.add(it);
@@ -4264,9 +4267,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Card i's place on screen (without its focus growth), scrolled with the row. */
     private void watchRect(int i, RectF out) {
-        float step = (WatchArt.W + WATCH_GAP) * k;
-        float x = MARGIN * k + i * step - watchScroll.value * step, y = L_CARDS_TOP * k;
-        out.set(x, y, x + WatchArt.W * k, y + WatchArt.H * k);
+        boolean big = continueMode();
+        float cw = big ? WatchArt.W : ROW_W, ch = big ? WatchArt.H : ROW_W * WatchArt.H / WatchArt.W;
+        float step = (cw + (big ? WATCH_GAP : ROW_GAP)) * k;
+        float x = MARGIN * k + i * step - watchScroll.value * step, y = (big ? L_CARDS_TOP : WROW_TOP) * k;
+        out.set(x, y, x + cw * k, y + ch * k);
     }
 
     /** Each card's title and details line ("Netflix · S2 E5 · 23 min left"), cut to the card's width once per list. */
@@ -4275,7 +4280,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         watchTitles = new String[n];
         watchMetas = new String[n];
         TextPaint tp = new TextPaint(lCardTitle), mp = new TextPaint(lCardMeta);
-        float width = WatchArt.W * k;
+        float width = (continueMode() ? WatchArt.W : ROW_W) * k;
         for (int i = 0; i < n; i++) {
             WatchNext.Item it = watching.get(i);
             watchTitles[i] = TextUtils.ellipsize(it.title, tp, width, TextUtils.TruncateAt.END).toString();
@@ -4758,6 +4763,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (clockMode()) {
             titleRight = 0;
             drawClock(c);
+            if (!watching.isEmpty()) drawWatchRow(c);
             if (HomeData.coinCount() > 0 || playingTab != null) drawQuotes(c);
             drawMediaCard(c);
             return;
@@ -5143,7 +5149,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (dy >= 0) return false;
                 if (!picksMode()) {
                     // No tabs or picks: up goes to what you were watching, or to the corner buttons.
-                    if (continueMode() && !watching.isEmpty()) {
+                    if (!watching.isEmpty()) {
                         zone = Z_WATCH;
                     } else if (!lightButtons.isEmpty()) {
                         zone = Z_TOP;
@@ -5181,9 +5187,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     if (next == watchIndex) return true;
                     watchIndex = next;
                 } else if (dy < 0) {
-                    if (lightButtons.isEmpty()) return true;
-                    zone = Z_TOP;
-                    topIndex = 3;
+                    if (!continueMode() && mediaOn()) {
+                        zone = Z_MEDIA;
+                        mediaIndex = 3;
+                    } else {
+                        if (lightButtons.isEmpty()) return true;
+                        zone = Z_TOP;
+                        topIndex = 3;
+                    }
                 } else {
                     zone = Z_SHELF;
                 }
@@ -5191,7 +5202,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case Z_TOP:
                 if (dx != 0 && !picksMode() && topIndex + dx < 3) return true;   // no tabs to the left
                 if (dy > 0 && !picksMode()) {
-                    zone = continueMode() && !watching.isEmpty() ? Z_WATCH : Z_SHELF;
+                    zone = !watching.isEmpty() ? Z_WATCH : Z_SHELF;
                     break;
                 }
                 if (dx != 0) {
