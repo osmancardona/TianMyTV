@@ -121,7 +121,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
     private static final float L_TITLE_BASE = 130, L_TABBAR_TOP = 158, L_TABBAR_H = 68, L_CARDS_TOP = 262, L_CARD_H = 442;
-    private static final float WATCH_GAP = 40, ROW_W = 300, ROW_GAP = 28, WROW_TOP = 470;
+    private static final float WATCH_GAP = 40, ROW_W = 340, ROW_GAP = 30, WROW_TOP = 455;
     private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103;
     private static final float L_STATUS = 25, L_STATUS_GAP = 22;
     private static final String[] STATUS_SYMBOLS = {"wifi", "ethernet", "bluetooth", "usb"};
@@ -4405,6 +4405,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             rim.setStrokeWidth(2.5f * k);
             rim.setAlpha(255);
             c.restore();
+        }
+        if (f > 0.01f && !continueMode()) {
+            String go = "Reanudar";
+            float pw = lCardMeta.measureText(go) + 56 * k, ph = 46 * k;
+            tmp.set(cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2);
+            fill.setShader(null);
+            fill.setColor(Ui.alpha(0xFFFFFFFF, 0.92f * f));
+            c.drawRoundRect(tmp, ph / 2, ph / 2, fill);
+            int old = lCardMeta.getColor();
+            lCardMeta.setColor(Ui.alpha(0xFF000000, f));
+            c.drawText(go, tmp.left + 28 * k, tmp.centerY() + Ui.cap(lCardMeta) / 2, lCardMeta);
+            lCardMeta.setColor(old);
         }
         c.drawText(watchTitles[i], textLeft, textTop + 46 * k, lCardTitle);
         if (!watchMetas[i].isEmpty()) c.drawText(watchMetas[i], textLeft, textTop + 80 * k, lCardMeta);

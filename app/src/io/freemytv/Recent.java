@@ -27,7 +27,7 @@ import java.util.List;
 final class Recent {
     private Recent() {}
 
-    private static final int MAX = 8;
+    private static final int MAX = 4;
     private static final long TICK_MS = 20_000;
     private static final String[] SKIP = {"spotify", "music", "podcast", "radio", "soundcloud", "deezer", "audio"};
     private static final Handler H = new Handler(Looper.getMainLooper());
@@ -107,6 +107,7 @@ final class Recent {
             pos += (long) ((SystemClock.elapsedRealtime() - s.getLastPositionUpdateTime()) * s.getPlaybackSpeed());
         }
         if (dur > 0 && pos > dur) pos = dur;
+        final MediaMetadata md = m;
         boolean done = dur > 0 && dur - pos < 15_000;   // finished: it leaves the row
         synchronized (Recent.class) {
             JSONArray old = read(app);
@@ -128,7 +129,37 @@ final class Recent {
             }
             write(out);
         }
+        saveArt(pkg, title, md);
     }
+
+    private static String artName(String pkg, String title) {
+        return "recent-art/" + Integer.toHexString((pkg + "|" + title).hashCode()) + ".jpg";
+    }
+
+    /** The card's picture, kept once per title (in the background: it may need a download). */
+    private static void saveArt(String pkg, String title, MediaMetadata m) {
+        File f = new File(app.getFilesDir(), artName(pkg, title));
+        if (f.exists()) return;
+        android.graphics.Bitmap b = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
+        if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
+        if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
+        final android.graphics.Bitmap bmp = b;
+        final String uri = first(m, MediaMetadata.METADATA_KEY_ART_URI, MediaMetadata.METADATA_KEY_ALBUM_ART_URI,
+                MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI);
+        if (bmp == null && uri == null) return;
+        ART.execute(() -> {
+            android.graphics.Bitmap x = bmp != null ? bmp : NowPlaying.fetch(app, uri);
+            if (x == null) return;
+            f.getParentFile().mkdirs();
+            try (FileOutputStream out = new FileOutputStream(f)) {
+                x.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, out);
+            } catch (java.io.IOException e) {
+                f.delete();
+            }
+        });
+    }
+
+    private static final java.util.concurrent.ExecutorService ART = java.util.concurrent.Executors.newSingleThreadExecutor();
 
     private static String first(MediaMetadata m, String... keys) {
         for (String k : keys) {
@@ -153,7 +184,8 @@ final class Recent {
             } catch (PackageManager.NameNotFoundException e) {
                 continue;
             }
-            WatchNext.Item it = new WatchNext.Item(pkg, null, null);
+            File art = new File(c.getFilesDir(), artName(pkg, o.optString("title")));
+            WatchNext.Item it = new WatchNext.Item(pkg, art.exists() ? android.net.Uri.fromFile(art).toString() : null, null);
             it.title = o.optString("title");
             it.episode = o.optString("sub").isEmpty() ? null : o.optString("sub");
             it.app = label;

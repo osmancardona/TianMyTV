@@ -47,6 +47,7 @@ final class WatchNext {
             picture = thumbnail != null ? thumbnail : poster;
             Uri uri = picture == null ? null : Uri.parse(picture);
             pictureUri = uri != null && ("content".equalsIgnoreCase(uri.getScheme())
+                    || "file".equalsIgnoreCase(uri.getScheme()) && uri.getPath() != null && uri.getPath().contains("/files/recent-art/")
                     || "android.resource".equalsIgnoreCase(uri.getScheme())) ? uri : null;
             pictureKey = pictureUri == null ? null : picture;
             bannerKey = "banner:" + pkg;
