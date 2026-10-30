@@ -35,11 +35,19 @@ final class Click {
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build();
             move = pool.load(fromAsset(c, "bubble-pop.wav"), 1);
-            open = pool.load(wav(c, "click-open.wav", 880f, 0.022f, 0.090f), 1);
+            open = pool.load(chime(c, "chime-open.wav"), 1);
         } catch (IOException | RuntimeException e) {
             AppLog.w("click sound unavailable: " + e.getMessage());
             release();
         }
+    }
+
+    private static Click shared;
+
+    /** The sound of opening something, for the screens that have no Click of their own. */
+    static synchronized void playOpen(Context c) {
+        if (shared == null) shared = new Click(c.getApplicationContext());
+        shared.open();
     }
 
     void move() {
@@ -54,7 +62,7 @@ final class Click {
         if (pool == null || !Prefs.sounds()) return;
         handler.post(() -> {
             SoundPool p = pool;
-            if (p != null) p.play(open, 0.18f, 0.18f, 1, 0, 1f);
+            if (p != null) p.play(open, 0.5f, 0.5f, 1, 0, 1f);
         });
     }
 
@@ -63,6 +71,35 @@ final class Click {
         pool = null;
         if (p != null) handler.post(p::release);   // after the plays already queued, never during one
         thread.quitSafely();
+    }
+
+    /** Two soft notes going up, a little bell: opening an app or a setting. */
+    private static String chime(Context c, String name) throws IOException {
+        File f = new File(c.getCacheDir(), "v2-" + name);
+        if (f.exists() && f.length() > 44) return f.getPath();
+        float seconds = 0.34f;
+        int n = Math.round(RATE * seconds);
+        ByteBuffer b = ByteBuffer.allocate(44 + n * 2).order(ByteOrder.LITTLE_ENDIAN);
+        b.put("RIFF".getBytes("US-ASCII")).putInt(36 + n * 2).put("WAVE".getBytes("US-ASCII"));
+        b.put("fmt ".getBytes("US-ASCII")).putInt(16).putShort((short) 1).putShort((short) 1)
+                .putInt(RATE).putInt(RATE * 2).putShort((short) 2).putShort((short) 16);
+        b.put("data".getBytes("US-ASCII")).putInt(n * 2);
+        for (int i = 0; i < n; i++) {
+            double t = (double) i / RATE;
+            double s = note(t, 0.0, 987.77) + note(t, 0.09, 1479.98);
+            b.putShort((short) Math.round(Math.max(-1, Math.min(1, s)) * 0.6 * Short.MAX_VALUE));
+        }
+        try (FileOutputStream out = new FileOutputStream(f)) {
+            out.write(b.array());
+        }
+        return f.getPath();
+    }
+
+    private static double note(double t, double start, double freq) {
+        double x = t - start;
+        if (x < 0) return 0;
+        double env = Math.min(1, x / 0.004) * Math.exp(-x / 0.075);
+        return env * (0.8 * Math.sin(2 * Math.PI * freq * x) + 0.2 * Math.sin(2 * Math.PI * freq * 2.76 * x)) * 0.7;
     }
 
     /** The bubble pop (assets/sounds), copied once to the cache where SoundPool can read it. */

@@ -8,51 +8,46 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
-import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Base64;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.KeyEvent;
 import android.view.View;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Wallpaper: the one in use, the ones that come with the app, the ones you add (from your phone: the TV shows a code, the
- * phone sends the pictures over the Wi-Fi). OK picks one, hold OK removes one you added.
+ * Wallpaper: the two that come with the app (Alastor and the TIAN emblem), "search online", and the folders with what you
+ * downloaded (100 to a folder; the next one opens by itself). OK puts one behind the home screen at once; holding OK on a
+ * downloaded one brings up a card from the bottom edge to delete it, and the picture flies into the trash.
  */
 public class WallpaperActivity extends Activity {
-    private static final String[] BUILT_IN = {"Alastor", "Emblema TIAN", "Luna de Sangre", "Humo Carmesi", "Brasas", "Medianoche"};
+    private static final String[] BUILT_IN = {"Alastor", "Emblema TIAN"};
+    static final int PER_FOLDER = 100;
 
-    private static final java.util.Map<String, Float> SMART = new java.util.concurrent.ConcurrentHashMap<>();
     private WallView view;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private UploadPage page;
+    private final ExecutorService thumbWorker = Executors.newSingleThreadExecutor();
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -62,10 +57,9 @@ public class WallpaperActivity extends Activity {
         setContentView(view);
     }
 
-    @Override protected void onStop() {
-        stopPage();
-        super.onStop();
-        if (!isFinishing()) finish();
+    @Override protected void onResume() {
+        super.onResume();
+        if (view != null) view.reload();   // coming back from the catalog: what was downloaded is there
     }
 
     @Override public void finish() {
@@ -75,19 +69,13 @@ public class WallpaperActivity extends Activity {
 
     @Override protected void onDestroy() {
         worker.shutdownNow();
+        thumbWorker.shutdownNow();
         super.onDestroy();
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
         if (view.onKey(e)) return true;
         return super.dispatchKeyEvent(e);
-    }
-
-    private void stopPage() {
-        if (page != null) {
-            page.close();
-            page = null;
-        }
     }
 
     static File dir(Context c) {
@@ -100,7 +88,18 @@ public class WallpaperActivity extends Activity {
         return c.getSharedPreferences("tian", Context.MODE_PRIVATE);
     }
 
-    /** The picture behind a wallpaper: one of the built-in ones (made here) or a file you added. */
+    /** The downloaded wallpapers, oldest first: folder k holds the ones from 100 k to 100 k + 99. */
+    static List<String> downloaded(Context c) {
+        File[] all = dir(c).listFiles();
+        List<File> list = new ArrayList<>();
+        if (all != null) for (File f : all) if (f.getName().startsWith("w-") && f.getName().endsWith(".jpg")) list.add(f);
+        Collections.sort(list, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        List<String> ids = new ArrayList<>();
+        for (File f : list) ids.add(f.getName());
+        return ids;
+    }
+
+    /** The picture behind a wallpaper: one of the two that come with the app, or a downloaded file. */
     private static Bitmap load(Context c, String id, int w, int h) {
         try {
             if (id.startsWith("builtin:")) {
@@ -108,7 +107,7 @@ public class WallpaperActivity extends Activity {
                 if (name.equals("Alastor")) {
                     try (InputStream in = c.getAssets().open("bg-alastor.jpg")) {
                         BitmapFactory.Options o = new BitmapFactory.Options();
-                        o.inSampleSize = Math.max(1, 1920 / Math.max(1, w));
+                        o.inSampleSize = Math.max(1, 2000 / Math.max(1, w));
                         return BitmapFactory.decodeStream(in, null, o);
                     }
                 }
@@ -140,8 +139,10 @@ public class WallpaperActivity extends Activity {
         }
     }
 
+    // MARK: - Making the picture the TV's size
+
     /** A soft blur: three passes of a box (radius r) in each direction. */
-    private static Bitmap blurred(Bitmap src, int r) {
+    static Bitmap blurred(Bitmap src, int r) {
         int w = src.getWidth(), h = src.getHeight();
         int[] px = new int[w * h], tmp = new int[w * h];
         src.getPixels(px, 0, w, 0, 0, w, h);
@@ -217,7 +218,7 @@ public class WallpaperActivity extends Activity {
             float sum = 0;
             for (int i = start; i < start + win; i++) sum += energy[i];
             float centre = (start + win / 2f) / n;
-            sum *= 1 - 0.15f * Math.abs(centre - 0.42f);   // a little taste for the upper middle, where faces tend to be
+            sum *= 1 - 0.15f * Math.abs(centre - 0.42f);
             if (sum > best) {
                 best = sum;
                 bestStart = start;
@@ -275,7 +276,6 @@ public class WallpaperActivity extends Activity {
             sc.drawBitmap(scaleTo(part, tw, th), null, dst, sp);
             if (scale > 1.3f) sharpened(screen, Math.min(0.9f, 0.35f + 0.15f * scale));
         } else {
-            // behind: the same picture zoomed to fill the screen, softly blurred and a little darker, so the colours match
             float cover = Math.max(tw / (float) b.getWidth(), th / (float) b.getHeight());
             int cw = Math.min(b.getWidth(), Math.round(tw / cover)), ch = Math.min(b.getHeight(), Math.round(th / cover));
             Bitmap mid = Bitmap.createBitmap(b, (b.getWidth() - cw) / 2, (b.getHeight() - ch) / 2, cw, ch);
@@ -284,7 +284,6 @@ public class WallpaperActivity extends Activity {
             sp.setColor(0x40000000);
             sc.drawRect(dst, sp);
             sp.setColor(0xFFFFFFFF);
-            // in front: the whole picture, sharp, its open sides melting into the haze
             float fit = Math.min(tw / (float) b.getWidth(), th / (float) b.getHeight());
             int fw = Math.max(1, Math.round(b.getWidth() * fit)), fh = Math.max(1, Math.round(b.getHeight() * fit));
             Bitmap whole = scaleTo(b, fw, fh);
@@ -310,7 +309,6 @@ public class WallpaperActivity extends Activity {
         return true;
     }
 
-    /** Puts it behind the home screen: the home's own photo, one only. */
     /** Puts wallpaper `id` behind the home screen (off the main thread): the home's own photo, one only. */
     static void applyFile(Context app, String id) {
         Bitmap b = load(app, id, 2112, 1188);
@@ -333,260 +331,31 @@ public class WallpaperActivity extends Activity {
         });
     }
 
-    private void apply(String id) {
-        final Context app = getApplicationContext();
-        worker.execute(() -> {
-            Bitmap b = load(app, id, 2112, 1188);
-            if (b == null) return;
-            Photos.removeAll(app);
-            File in = Photos.privateInbox(app);
-            in.mkdirs();
-            File out = new File(in, "wallpaper.jpg");
-            try (FileOutputStream f = new FileOutputStream(out)) {
-                b.compress(Bitmap.CompressFormat.JPEG, 97, f);
-            } catch (IOException e) {
-                AppLog.w("wallpaper: " + e.getMessage());
-                return;
-            }
-            prefs(app).edit().putString("wallpaper", id).apply();
-            Prefs.setPhotos(true);
-            Photos.importInbox(app, () -> {
-                Prefs.setPhotos(true);
-                Runnable hook = Photos.photosHook;
-                if (hook != null) hook.run();   // the home screen takes it at once
-                view.invalidate();
-            });
-            handler.post(() -> view.setCurrent(id));
-        });
-    }
-
-    // MARK: - The page the phone opens
-
-    private static final class UploadPage {
-        interface Listener { void added(String name); void closed(); }
-
-        final String url;
-        private final ServerSocket server;
-        private final String path;
-        private final Context app;
-        private final Listener listener;
-        private volatile boolean closed;
-        private int uploads;
-
-        UploadPage(Context c, InetAddress lan, Listener listener) throws IOException {
-            app = c.getApplicationContext();
-            this.listener = listener;
-            byte[] random = new byte[12];
-            new SecureRandom().nextBytes(random);
-            path = "/" + Base64.encodeToString(random, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
-            server = new ServerSocket(0, 4, lan);
-            url = "http://" + lan.getHostAddress() + ":" + server.getLocalPort() + path;
-            Thread t = new Thread(this::serve, "WallpaperPage");
-            t.setDaemon(true);
-            t.start();
-        }
-
-        void close() {
-            closed = true;
-            try {
-                server.close();
-            } catch (IOException ignored) {
-            }
-        }
-
-        private void serve() {
-            long until = System.nanoTime() + 10 * 60_000_000_000L;
-            try {
-                while (!closed && System.nanoTime() < until) {
-                    server.setSoTimeout(5000);
-                    Socket s;
-                    try {
-                        s = server.accept();
-                    } catch (SocketTimeoutException e) {
-                        continue;
-                    }
-                    Thread t = new Thread(() -> answer(s), "WallpaperPage answer");
-                    t.setDaemon(true);
-                    t.start();
-                }
-            } catch (IOException e) {
-                // closed
-            } finally {
-                close();
-                listener.closed();
-            }
-        }
-
-        private void answer(Socket socket) {
-            try (Socket s = socket) {
-                s.setSoTimeout(15_000);
-                handle(s.getInputStream(), s.getOutputStream());
-            } catch (IOException | RuntimeException e) {
-                // a phone that went away
-            }
-        }
-
-        private void handle(InputStream in, OutputStream out) throws IOException {
-            ByteArrayOutputStream head = new ByteArrayOutputStream();
-            int state = 0;
-            while (state < 4 && head.size() < 8192) {
-                int b = in.read();
-                if (b < 0) return;
-                head.write(b);
-                state = (b == '\r' && (state == 0 || state == 2)) ? state + 1 : (b == '\n' && (state == 1 || state == 3)) ? state + 1 : 0;
-            }
-            if (state < 4) return;
-            String h = head.toString("ISO-8859-1");
-            String[] line = h.substring(0, Math.max(0, h.indexOf("\r\n"))).split(" ");
-            if (line.length < 2) return;
-            String method = line[0], target = line[1];
-            String query = "";
-            int q = target.indexOf('?');
-            if (q >= 0) {
-                query = target.substring(q + 1);
-                target = target.substring(0, q);
-            }
-            if (method.equals("GET") && target.equals(path)) {
-                respond(out, "200 OK", "text/html; charset=utf-8", PAGE.replace("@UP@", path + "/up").getBytes(StandardCharsets.UTF_8));
-            } else if (method.equals("POST") && target.equals(path + "/up")) {
-                long length = -1;
-                for (String l : h.split("\r\n")) {
-                    if (l.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:")) length = Long.parseLong(l.substring(15).trim());
-                }
-                if (length <= 0 || length > 30_000_000L || uploads >= 40) {
-                    respond(out, "413 Payload Too Large", "text/plain", new byte[0]);
-                    return;
-                }
-                File tmp = new File(app.getCacheDir(), "upload.tmp");
-                try (FileOutputStream f = new FileOutputStream(tmp)) {
-                    byte[] buf = new byte[16384];
-                    long left = length;
-                    while (left > 0) {
-                        int n = in.read(buf, 0, (int) Math.min(buf.length, left));
-                        if (n < 0) throw new IOException("cut short");
-                        f.write(buf, 0, n);
-                        left -= n;
-                    }
-                }
-                String name = save(tmp);
-                tmp.delete();
-                if (name == null) {
-                    respond(out, "415 Unsupported Media Type", "text/plain", "No es una imagen".getBytes(StandardCharsets.UTF_8));
-                    return;
-                }
-                uploads++;
-                respond(out, "200 OK", "text/plain", "ok".getBytes(StandardCharsets.UTF_8));
-                listener.added(name);
-            } else {
-                respond(out, "404 Not Found", "text/plain", "Not found".getBytes(StandardCharsets.UTF_8));
-            }
-        }
-
-        /**
-         * The picture as the TV shows it: turned the way it was taken (the phone's own turn is read from the file),
-         * kept at full quality and sized to the screen (2112 by 1188), whole: a picture that is not 16:9 sits in the middle
-         * over a soft dark copy of itself. Saved as JPEG; its file name, or null when it isn't a picture.
-         */
-        private String save(File tmp) {
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(tmp.getPath(), bounds);
-            if (bounds.outWidth < 400 || bounds.outHeight < 300) return null;
-            // decoded no smaller than the screen needs: a phone's 12 megapixels are cut down once, well, not twice
-            BitmapFactory.Options o = new BitmapFactory.Options();
-            int sample = 1;
-            while (bounds.outWidth / (sample * 2) >= Photos.W && bounds.outHeight / (sample * 2) >= Photos.H) sample *= 2;
-            o.inSampleSize = sample;
-            Bitmap b = BitmapFactory.decodeFile(tmp.getPath(), o);
-            if (b == null) return null;
-            b = turned(tmp, b);
-            String name = "w-" + System.currentTimeMillis() + ".jpg";
-            try (FileOutputStream f = new FileOutputStream(new File(dir(app), "o-" + name))) {
-                b.compress(Bitmap.CompressFormat.JPEG, 95, f);   // the original, turned right: the editor draws from it
-            } catch (IOException ex) {
-                return null;
-            }
-            float ratio = b.getWidth() / (float) b.getHeight();
-            float smart = smartOffset(b);
-            if (!render(app, name, 0, smart)) return null;
-            SMART.put(name, smart);
-            return name;
-        }
-
-        /** Cut down in halves while it stays at least the target, then to it: sharper than one big step. */
-        private static Bitmap shrunk(Bitmap src, int tw, int th) {
-            Bitmap cur = src;
-            while (cur.getWidth() / 2 >= tw && cur.getHeight() / 2 >= th) {
-                cur = Bitmap.createScaledBitmap(cur, cur.getWidth() / 2, cur.getHeight() / 2, true);
-            }
-            if (cur.getWidth() != tw || cur.getHeight() != th) cur = Bitmap.createScaledBitmap(cur, tw, th, true);
-            return cur;
-        }
-
-        /** The turn a phone wrote in the file (its camera held upright, sideways, or the front camera's mirror). */
-        private static Bitmap turned(File f, Bitmap b) {
-            try {
-                int o = new android.media.ExifInterface(f.getPath()).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1);
-                android.graphics.Matrix m = new android.graphics.Matrix();
-                switch (o) {
-                    case 2: m.setScale(-1, 1); break;
-                    case 3: m.setRotate(180); break;
-                    case 4: m.setScale(1, -1); break;
-                    case 5: m.setRotate(90); m.postScale(-1, 1); break;
-                    case 6: m.setRotate(90); break;
-                    case 7: m.setRotate(-90); m.postScale(-1, 1); break;
-                    case 8: m.setRotate(-90); break;
-                    default: return b;
-                }
-                return Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true);
-            } catch (IOException | RuntimeException e) {
-                return b;
-            }
-        }
-
-        private static void respond(OutputStream out, String status, String type, byte[] body) throws IOException {
-            String head = "HTTP/1.1 " + status + "\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length
-                    + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
-            out.write(head.getBytes(StandardCharsets.ISO_8859_1));
-            out.write(body);
-            out.flush();
-        }
-
-        private static final String PAGE = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-                + "<title>Tian Demon TV</title><style>body{font-family:sans-serif;background:#12040a;color:#fff;text-align:center;padding:40px 20px}"
-                + "h1{font-size:26px}label{display:inline-block;background:#e3122b;color:#fff;padding:18px 34px;border-radius:40px;font-size:20px;margin:24px 0}"
-                + "input{display:none}p{opacity:.8}#log p{margin:6px 0}</style>"
-                + "<h1>Fondos para tu TV</h1><p>Elige una o varias fotos de tu celular.</p>"
-                + "<label for=f>Elegir fotos</label><input id=f type=file accept='image/*' multiple><div id=log></div>"
-                + "<script>var f=document.getElementById('f'),log=document.getElementById('log');"
-                + "f.onchange=async function(){for(var i=0;i<f.files.length;i++){var x=f.files[i],p=document.createElement('p');"
-                + "p.textContent='Enviando '+x.name+'...';log.appendChild(p);try{var r=await fetch('@UP@',{method:'POST',body:x});"
-                + "p.textContent=(r.ok?'Listo: ':'No se pudo: ')+x.name}catch(e){p.textContent='Error: '+x.name}}f.value=''}</script>";
-    }
-
     // MARK: - The screen
 
     private final class WallView extends View {
+        private static final int COLS = 4, ROWS = 3;
         private final float k;
-        private final List<String> ids = new ArrayList<>();   // "+" is index 0
-        private final List<Bitmap> thumbs = new ArrayList<>();
-        private int focus = 1, scroll;
-        private String current;
+        private final List<String> items = new ArrayList<>();   // what the screen shows now: "search", "builtin:..", "folder:n", or a file
+        private List<String> files = new ArrayList<>();         // all downloaded ones
+        private int level = -1;                                  // -1 the start, n a folder
+        private int focus = 1, scrollRow;
+        private String current = "builtin:Alastor", hint = "";
+        private final Map<String, Bitmap> thumbs = new HashMap<>();
+        private final Set<String> loading = new HashSet<>();
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint head = Ui.text(Ui.displaySemibold, 1, 0xFFFFFFFF), sub = Ui.text(Ui.medium, 1, 0xB3FFFFFF),
-                label = Ui.text(Ui.semibold, 1, 0xFFFFFFFF);
+                label = Ui.text(Ui.semibold, 1, 0xFFFFFFFF), btn = Ui.text(Ui.semibold, 1, 0xFFFFFFFF);
         private final RectF r = new RectF();
         private final Matrix matrix = new Matrix();
-        private Bitmap qr;
-        private final List<String> fresh = new ArrayList<>();   // pictures sent while the code was open
-        private final java.util.Map<String, Bitmap> previews = new java.util.HashMap<>();
-        private int freshIndex, freshBtn = 1, freshRow;
-        private final java.util.Map<String, float[]> adj = new java.util.HashMap<>();   // per picture: mode, offset
-        private long renderUntil;
-        private String qrUrl, hint = "";
-        private long holdAt;
         private Bitmap backdrop;
-        private static final int COLS = 4, ROWS = 2;
+        private long holdAt;
+        // the card from the bottom edge and the picture flying into the trash
+        private String sheetFor;
+        private long sheetAt, deleteAt, doneAt;
+        private int sheetBtn;
+        private boolean closing;
+        private final RectF flyFrom = new RectF();
 
         WallView(Context c) {
             super(c);
@@ -596,60 +365,36 @@ public class WallpaperActivity extends Activity {
             head.setTextSize(58 * k);
             sub.setTextSize(28 * k);
             label.setTextSize(26 * k);
+            btn.setTextSize(30 * k);
+            btn.setTextAlign(Paint.Align.CENTER);
             current = prefs(c).getString("wallpaper", "builtin:Alastor");
             reload();
         }
 
-        void setCurrent(String id) {
-            current = id;
-            hint = "Fondo cambiado";
-            loadBackdrop();
-            invalidate();
-        }
-
-        private void reload() {
-            ids.clear();
-            thumbs.clear();
-            ids.add("search");
-            thumbs.add(null);
-            for (String n : BUILT_IN) {
-                ids.add("builtin:" + n);
-                thumbs.add(null);
-            }
-            File[] mine = dir(getContext()).listFiles();
-            if (mine != null) {
-                Arrays.sort(mine);
-                List<File> list = new ArrayList<>(Arrays.asList(mine));
-                Collections.reverse(list);   // the newest first
-                for (File f : list) {
-                    if (f.getName().startsWith("w-") && f.getName().endsWith(".jpg")) {
-                        ids.add(f.getName());
-                        thumbs.add(null);
-                    }
+        void reload() {
+            files = downloaded(getContext());
+            items.clear();
+            if (level < 0) {
+                items.add("search");
+                for (String n : BUILT_IN) items.add("builtin:" + n);
+                for (int f = 0; f * PER_FOLDER < files.size(); f++) items.add("folder:" + f);
+            } else {
+                int from = level * PER_FOLDER, to = Math.min(files.size(), from + PER_FOLDER);
+                if (from >= files.size()) {
+                    level = -1;
+                    reload();
+                    return;
                 }
+                for (int i = from; i < to; i++) items.add(files.get(i));
             }
-            if (focus >= ids.size()) focus = ids.size() - 1;
+            if (focus >= items.size()) focus = Math.max(0, items.size() - 1);
             loadBackdrop();
-            for (int i = 0; i < ids.size(); i++) {
-                final int index = i;
-                final String id = ids.get(i);
-                if (id.equals("search")) continue;
-                worker.execute(() -> {
-                    Bitmap t = load(getContext(), id, 480, 270);
-                    handler.post(() -> {
-                        if (index < thumbs.size() && ids.get(index).equals(id)) {
-                            thumbs.set(index, t);
-                            invalidate();
-                        }
-                    });
-                });
-            }
             invalidate();
         }
 
         private void loadBackdrop() {
             final String id = current;
-            worker.execute(() -> {
+            thumbWorker.execute(() -> {
                 Bitmap b = load(getContext(), id, 240, 135);
                 handler.post(() -> {
                     backdrop = b;
@@ -658,56 +403,70 @@ public class WallpaperActivity extends Activity {
             });
         }
 
+        private String folderName(int f) {
+            return files.size() <= PER_FOLDER ? "Descargados" : "Descargados " + (f + 1);
+        }
+
+        /** The small picture of a wallpaper (or of the first ones of a folder), loaded when it comes into view. */
+        private Bitmap thumb(String id) {
+            Bitmap t = thumbs.get(id);
+            if (t != null || loading.contains(id)) return t;
+            if (id.equals("search") || id.startsWith("folder:")) return null;
+            loading.add(id);
+            thumbWorker.execute(() -> {
+                Bitmap b = load(getContext(), id, 480, 270);
+                handler.post(() -> {
+                    if (thumbs.size() > 60) thumbs.clear();
+                    if (b != null) thumbs.put(id, b);
+                    loading.remove(id);
+                    invalidate();
+                });
+            });
+            return null;
+        }
+
+        void setCurrent(String id) {
+            current = id;
+            loadBackdrop();
+            invalidate();
+        }
+
         boolean onKey(KeyEvent e) {
             int code = e.getKeyCode();
             boolean dpad = code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_DPAD_UP
                     || code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
-            if (page != null && code == KeyEvent.KEYCODE_BACK) {
-                if (e.getAction() == KeyEvent.ACTION_UP) closeCode();
+            boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+            if (deleteAt != 0) return true;   // the picture is flying: nothing else to do
+            if (code == KeyEvent.KEYCODE_BACK) {
+                if (!down) {
+                    if (sheetFor != null) {
+                        closeSheet();
+                    } else if (level >= 0) {
+                        level = -1;
+                        focus = 1;
+                        scrollRow = 0;
+                        reload();
+                    } else {
+                        finish();
+                    }
+                }
                 return true;
             }
             if (!dpad) return false;
-            if (page != null) {   // the code, or the pictures that came
-                if (e.getAction() != KeyEvent.ACTION_DOWN || fresh.isEmpty()) return true;
-                boolean ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
-                if (code == KeyEvent.KEYCODE_DPAD_UP) {
-                    freshRow = 0;
-                } else if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    freshRow = 1;
-                } else if (freshRow == 0 && code == KeyEvent.KEYCODE_DPAD_LEFT && fresh.size() > 1) {
-                    freshIndex = (freshIndex - 1 + fresh.size()) % fresh.size();
-                    apply(fresh.get(freshIndex));
-                } else if (freshRow == 0 && code == KeyEvent.KEYCODE_DPAD_RIGHT && fresh.size() > 1) {
-                    freshIndex = (freshIndex + 1) % fresh.size();
-                    apply(fresh.get(freshIndex));
-                } else if (freshRow == 1 && code == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    freshBtn = Math.max(0, freshBtn - 1);
-                } else if (freshRow == 1 && code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    freshBtn = Math.min(2, freshBtn + 1);
-                } else if (ok && e.getRepeatCount() == 0) {
-                    String id = fresh.get(freshIndex);
-                    float[] a2 = adj.get(id);
-                    if (freshRow == 1 && freshBtn == 0 && a2 != null) {
-                        a2[0] = a2[0] == 0 ? 1 : 0;
-                        redraw(id, a2);
-                    } else if (freshRow == 1 && freshBtn == 2) {
-                        deleteFresh();
-                    } else {
-                        float[] cur = adj.get(id);
-                        closeCode();
-                        apply(id);
-                        return true;
-                    }
+            if (sheetFor != null) {
+                if (down && code == KeyEvent.KEYCODE_DPAD_LEFT) sheetBtn = 0;
+                else if (down && code == KeyEvent.KEYCODE_DPAD_RIGHT) sheetBtn = 1;
+                else if (down && (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) && e.getRepeatCount() == 0) {
+                    if (sheetBtn == 0) startDelete(); else closeSheet();
                 }
                 invalidate();
                 return true;
             }
-            boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
             if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
                 if (down && e.getRepeatCount() == 0) holdAt = System.currentTimeMillis();
                 if (down && e.getRepeatCount() > 0 && e.isLongPress() && holdAt != 0) {
                     holdAt = 0;
-                    remove();
+                    holdOn();
                 } else if (!down && holdAt != 0) {
                     holdAt = 0;
                     choose();
@@ -720,11 +479,11 @@ public class WallpaperActivity extends Activity {
             else if (code == KeyEvent.KEYCODE_DPAD_RIGHT) next = focus + 1;
             else if (code == KeyEvent.KEYCODE_DPAD_UP) next = focus - COLS;
             else next = focus + COLS;
-            if (next >= 0 && next < ids.size()) {
+            if (next >= 0 && next < items.size()) {
                 focus = next;
                 int row = focus / COLS;
-                if (row < scroll) scroll = row;
-                if (row >= scroll + ROWS) scroll = row - ROWS + 1;
+                if (row < scrollRow) scrollRow = row;
+                if (row >= scrollRow + ROWS) scrollRow = row - ROWS + 1;
                 hint = "";
             }
             invalidate();
@@ -732,123 +491,84 @@ public class WallpaperActivity extends Activity {
         }
 
         private void choose() {
-            String id = ids.get(focus);
+            String id = items.get(focus);
+            Click.playOpen(getContext());
             if (id.equals("search")) {
                 startActivity(new Intent(getContext(), WallBrowseActivity.class));
                 return;
             }
-            hint = "Aplicando...";
-            invalidate();
-            apply(id);
-        }
-
-        private void remove() {
-            String id = ids.get(focus);
-            if (id.equals("search") || id.startsWith("builtin:")) {
-                hint = "Ese fondo viene con la app y no se borra";
-                invalidate();
+            if (id.startsWith("folder:")) {
+                level = Integer.parseInt(id.substring(7));
+                focus = 0;
+                scrollRow = 0;
+                reload();
                 return;
             }
-            new File(dir(getContext()), id).delete();
-            new File(dir(getContext()), "o-" + id).delete();
-            hint = "Fondo borrado";
-            reload();
-        }
-
-        /** Draws the picture again with the new choice (whole or filling, higher or lower) and shows it. */
-        private void redraw(String id, float[] a2) {
-            renderUntil = android.os.SystemClock.uptimeMillis() + 500;
+            hint = "Aplicando...";
+            invalidate();
             final Context app = getContext().getApplicationContext();
-            final int mode = Math.round(a2[0]);
-            final float offset = a2[1];
+            setCurrent(id);
             worker.execute(() -> {
-                render(app, id, mode, offset);
-                Bitmap p = load(app, id, 1000, 563);
+                applyFile(app, id);
                 handler.post(() -> {
-                    previews.put(id, p);
+                    hint = "Fondo cambiado";
                     invalidate();
                 });
-                apply(id);
             });
         }
 
-        /** Removes the picture on show (and its original); the wallpaper goes back to Alastor if it was the one in use. */
-        private void deleteFresh() {
-            String id = fresh.remove(freshIndex);
-            previews.remove(id);
-            adj.remove(id);
-            new File(dir(getContext()), id).delete();
-            new File(dir(getContext()), "o-" + id).delete();
-            if (id.equals(current)) apply("builtin:Alastor");
-            hint = "Fondo eliminado";
-            if (fresh.isEmpty()) {
-                closeCode();
-            } else {
-                freshIndex = Math.min(freshIndex, fresh.size() - 1);
-                apply(fresh.get(freshIndex));
-                reload();
-            }
-        }
-
-        /** Closes the window of the code (and of the pictures that came); the list of wallpapers stays. */
-        private void closeCode() {
-            stopPage();
-            fresh.clear();
-            previews.clear();
-            reload();
-        }
-
-        private void startPage() {
-            InetAddress lan = KeyPage.lanAddress(getContext());
-            if (lan == null) {
-                hint = "No hay Wi-Fi para conectar el celular";
+        /** Holding OK on a downloaded wallpaper brings up the card from the bottom edge. */
+        private void holdOn() {
+            String id = items.get(focus);
+            if (id.equals("search") || id.startsWith("builtin:") || id.startsWith("folder:")) {
+                if (id.startsWith("builtin:")) hint = "Ese fondo viene con la app y no se borra";
                 invalidate();
                 return;
             }
-            try {
-                page = new UploadPage(getContext(), lan, new UploadPage.Listener() {
-                    @Override public void added(String name) {
-                        handler.post(() -> {
-                            fresh.add(name);
-                            freshIndex = fresh.size() - 1;
-                            freshBtn = 1;
-                            freshRow = 0;
-                            BitmapFactory.Options bo = new BitmapFactory.Options();
-                            bo.inJustDecodeBounds = true;
-                            BitmapFactory.decodeFile(new File(dir(getContext()), "o-" + name).getPath(), bo);
-                            Float chosen = SMART.get(name);
-                            adj.put(name, new float[] {0, chosen == null ? 0.5f : chosen});
-                            renderUntil = android.os.SystemClock.uptimeMillis() + 700;
-                            apply(name);
-                            hint = "Foto agregada";
-                            reload();
-                            worker.execute(() -> {
-                                Bitmap p = load(getContext(), name, 1000, 563);
-                                handler.post(() -> {
-                                    previews.put(name, p);
-                                    invalidate();
-                                });
-                            });
-                        });
-                    }
-
-                    @Override public void closed() {
-                        handler.post(() -> {
-                            page = null;
-                            invalidate();
-                        });
-                    }
-                });
-                qrUrl = page.url;
-                qr = Qrs.bitmap(Qr.encode(page.url));
-            } catch (IOException | RuntimeException e) {
-                hint = "No se pudo abrir: " + e.getMessage();
-                page = null;
-            }
+            sheetFor = id;
+            sheetBtn = 1;
+            closing = false;
+            sheetAt = SystemClock.uptimeMillis();
             invalidate();
         }
 
+        private void closeSheet() {
+            closing = true;
+            sheetAt = SystemClock.uptimeMillis();
+            invalidate();
+        }
+
+        private void startDelete() {
+            int row = focus / COLS - scrollRow, col = focus % COLS;
+            float cw = 380 * k, ch = 214 * k, gap = 36 * k;
+            float x = 110 * k + col * (cw + gap), y = 250 * k + row * (ch + gap + 36 * k);
+            flyFrom.set(x, y, x + cw, y + ch);
+            deleteAt = SystemClock.uptimeMillis();
+            invalidate();
+        }
+
+        private float sheetProgress(long now) {
+            float t = Math.min(1, (now - sheetAt) / 280f);
+            float e = 1 - (1 - t) * (1 - t) * (1 - t);
+            return closing ? 1 - e : e;
+        }
+
+        private void finishDelete() {
+            String id = sheetFor;
+            new File(dir(getContext()), id).delete();
+            new File(dir(getContext()), "o-" + id).delete();
+            thumbs.remove(id);
+            final Context app = getContext().getApplicationContext();
+            if (id.equals(current)) {
+                setCurrent("builtin:Alastor");
+                worker.execute(() -> applyFile(app, "builtin:Alastor"));
+            }
+            hint = "Fondo eliminado";
+            reload();
+        }
+
         @Override protected void onDraw(Canvas c) {
+            long now = SystemClock.uptimeMillis();
             int w = getWidth(), h = getHeight();
             if (backdrop != null) {
                 r.set(0, 0, w, h);
@@ -858,197 +578,190 @@ public class WallpaperActivity extends Activity {
             }
             fill.setColor(0xCC08020A);
             c.drawRect(0, 0, w, h, fill);
-            c.drawText("Fondo de pantalla", 110 * k, 130 * k, head);
+            c.drawText(level < 0 ? "Fondo de pantalla" : folderName(level), 110 * k, 130 * k, head);
             sub.setTextAlign(Paint.Align.LEFT);
-            c.drawText(hint.isEmpty() ? "Elige un fondo y pulsa OK: se pone al instante." : hint, 110 * k, 180 * k, sub);
+            c.drawText(hint.isEmpty() ? (level < 0 ? "Elige un fondo y pulsa OK: se pone al instante." : "OK lo pone. Mantén OK para eliminarlo. Atrás vuelve.") : hint, 110 * k, 180 * k, sub);
 
             float cw = 380 * k, ch = 214 * k, gap = 36 * k, left = 110 * k, top = 250 * k;
+            boolean flying = deleteAt != 0;
+            float flyT = flying ? Math.min(1, (now - deleteAt) / 1100f) : 0;
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < COLS; col++) {
-                    int i = (scroll + row) * COLS + col;
-                    if (i >= ids.size()) continue;
-                    float x = left + col * (cw + gap), y = top + row * (ch + gap + 36 * k);
-                    r.set(x, y, x + cw, y + ch);
-                    boolean on = i == focus;
-                    String id = ids.get(i);
-                    if (id.equals("search")) {
-                        fill.setColor(0x33FFFFFF);
-                        c.drawRoundRect(r, 24 * k, 24 * k, fill);
-                        fill.setStyle(Paint.Style.STROKE);
-                        fill.setStrokeWidth(2.5f * k);
-                        fill.setColor(0x88FFFFFF);
-                        c.drawRoundRect(r, 24 * k, 24 * k, fill);
-                        fill.setColor(0xFFFFFFFF);
-                        fill.setStrokeWidth(6 * k);
-                        fill.setStrokeCap(Paint.Cap.ROUND);
-                        c.drawCircle(r.centerX() - 6 * k, r.centerY() - 18 * k, 22 * k, fill);
-                        c.drawLine(r.centerX() + 10 * k, r.centerY() - 2 * k, r.centerX() + 28 * k, r.centerY() + 16 * k, fill);
-                        fill.setStyle(Paint.Style.FILL);
-                        label.setTextAlign(Paint.Align.CENTER);
-                        c.drawText("Buscar fondos en línea", r.centerX(), r.centerY() + 56 * k, label);
-                        label.setTextAlign(Paint.Align.LEFT);
-                    } else {
-                        Bitmap t = thumbs.get(i);
-                        if (t != null) {
-                            BitmapShader sh = new BitmapShader(t, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-                            float sc = Math.max(cw / t.getWidth(), ch / t.getHeight());
-                            matrix.setScale(sc, sc);
-                            matrix.postTranslate(x + (cw - t.getWidth() * sc) / 2, y + (ch - t.getHeight() * sc) / 2);
-                            sh.setLocalMatrix(matrix);
-                            fill.setShader(sh);
-                        } else {
-                            fill.setColor(0xFF2A0A12);
-                        }
-                        c.drawRoundRect(r, 24 * k, 24 * k, fill);
-                        fill.setShader(null);
-                        if (id.equals(current)) {
-                            fill.setColor(0xFF1DB954);
-                            c.drawRoundRect(x + cw - 120 * k, y + 14 * k, x + cw - 14 * k, y + 54 * k, 20 * k, 20 * k, fill);
-                            label.setTextAlign(Paint.Align.CENTER);
-                            c.drawText("En uso", x + cw - 67 * k, y + 42 * k, label);
-                            label.setTextAlign(Paint.Align.LEFT);
-                        }
-                        String name = id.startsWith("builtin:") ? id.substring(8) : id.startsWith("w-wh-") ? "Descargado" : "Mi foto";
-                        c.drawText(name, x + 6 * k, y + ch + 34 * k, label);
-                    }
-                    if (on) {
-                        fill.setStyle(Paint.Style.STROKE);
-                        fill.setStrokeWidth(6 * k);
-                        fill.setColor(0xFFFFFFFF);
-                        c.drawRoundRect(r.left - 6 * k, r.top - 6 * k, r.right + 6 * k, r.bottom + 6 * k, 28 * k, 28 * k, fill);
-                        fill.setStyle(Paint.Style.FILL);
-                    }
+                    int i = (scrollRow + row) * COLS + col;
+                    if (i >= items.size()) continue;
+                    String id = items.get(i);
+                    if (flying && id.equals(sheetFor)) continue;   // it is in the air
+                    drawTile(c, id, left + col * (cw + gap), top + row * (ch + gap + 36 * k), cw, ch, i == focus && sheetFor == null);
                 }
             }
-            if (page != null) drawCode(c, w, h);
+            if (sheetFor != null) drawSheet(c, w, h, now, flyT);
+            if (flying && flyT >= 1 && doneAt == 0) doneAt = now;
+            if (doneAt != 0 && now - doneAt > 700) {
+                finishDelete();
+                sheetFor = null;
+                deleteAt = 0;
+                doneAt = 0;
+                closing = false;
+            }
+            if (sheetFor != null && closing && now - sheetAt > 300) sheetFor = null;
+            if (sheetFor != null || deleteAt != 0) postInvalidateOnAnimation();
         }
 
-        private void drawFresh(Canvas c, int w, int h) {
-            fill.setColor(0xF2000000);
-            c.drawRect(0, 0, w, h, fill);
-            head.setTextAlign(Paint.Align.CENTER);
-            sub.setTextAlign(Paint.Align.CENTER);
-            head.setTextSize(50 * k);
-            c.drawText("Ya es tu fondo", w / 2f, 100 * k, head);
-            head.setTextSize(58 * k);
-            float iw = 1000 * k, ih = iw * 9 / 16, x = (w - iw) / 2f, y = 140 * k;
-            r.set(x, y, x + iw, y + ih);
-            fill.setColor(0xFF1A0A10);
-            c.drawRoundRect(r, 28 * k, 28 * k, fill);
-            String id = fresh.get(freshIndex);
-            Bitmap p = previews.get(id);
-            long left = renderUntil - android.os.SystemClock.uptimeMillis();
-            if (p != null && left <= 0) {
-                BitmapShader sh = new BitmapShader(p, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-                matrix.setScale(iw / p.getWidth(), ih / p.getHeight());
-                matrix.postTranslate(x, y);
+        private void drawTile(Canvas c, String id, float x, float y, float cw, float ch, boolean on) {
+            r.set(x, y, x + cw, y + ch);
+            String name;
+            if (id.equals("search")) {
+                fill.setColor(0x33FFFFFF);
+                c.drawRoundRect(r, 24 * k, 24 * k, fill);
+                fill.setStyle(Paint.Style.STROKE);
+                fill.setStrokeWidth(2.5f * k);
+                fill.setColor(0x88FFFFFF);
+                c.drawRoundRect(r, 24 * k, 24 * k, fill);
+                fill.setColor(0xFFFFFFFF);
+                fill.setStrokeWidth(6 * k);
+                fill.setStrokeCap(Paint.Cap.ROUND);
+                c.drawCircle(r.centerX() - 6 * k, r.centerY() - 18 * k, 22 * k, fill);
+                c.drawLine(r.centerX() + 10 * k, r.centerY() - 2 * k, r.centerX() + 28 * k, r.centerY() + 16 * k, fill);
+                fill.setStyle(Paint.Style.FILL);
+                label.setTextAlign(Paint.Align.CENTER);
+                c.drawText("Buscar fondos en línea", r.centerX(), r.centerY() + 56 * k, label);
+                label.setTextAlign(Paint.Align.LEFT);
+                name = null;
+            } else if (id.startsWith("folder:")) {
+                int f = Integer.parseInt(id.substring(7));
+                fill.setColor(0xFF2A0A12);
+                c.drawRoundRect(r, 24 * k, 24 * k, fill);
+                // a folder: up to four of its pictures side by side
+                int from = f * PER_FOLDER, n = Math.min(4, files.size() - from);
+                float pw = (cw - 36 * k) / 2f, ph = (ch - 36 * k) / 2f;
+                for (int q = 0; q < n; q++) {
+                    float px = x + 12 * k + (q % 2) * (pw + 12 * k), py = y + 12 * k + (q / 2) * (ph + 12 * k);
+                    drawPicture(c, thumb(files.get(from + q)), px, py, pw, ph, 12 * k);
+                }
+                name = folderName(f) + " · " + Math.min(PER_FOLDER, files.size() - from);
+            } else {
+                drawPicture(c, thumb(id), x, y, cw, ch, 24 * k);
+                if (id.equals(current)) {
+                    fill.setColor(0xFF1DB954);
+                    c.drawRoundRect(x + cw - 120 * k, y + 14 * k, x + cw - 14 * k, y + 54 * k, 20 * k, 20 * k, fill);
+                    label.setTextAlign(Paint.Align.CENTER);
+                    c.drawText("En uso", x + cw - 67 * k, y + 42 * k, label);
+                    label.setTextAlign(Paint.Align.LEFT);
+                }
+                name = id.startsWith("builtin:") ? id.substring(8) : "Descargado";
+            }
+            if (name != null) c.drawText(name, x + 6 * k, y + ch + 34 * k, label);
+            if (on) {
+                fill.setStyle(Paint.Style.STROKE);
+                fill.setStrokeWidth(6 * k);
+                fill.setColor(0xFFFFFFFF);
+                c.drawRoundRect(x - 6 * k, y - 6 * k, x + cw + 6 * k, y + ch + 6 * k, 28 * k, 28 * k, fill);
+                fill.setStyle(Paint.Style.FILL);
+            }
+        }
+
+        private void drawPicture(Canvas c, Bitmap t, float x, float y, float cw, float ch, float rad) {
+            r.set(x, y, x + cw, y + ch);
+            if (t != null) {
+                BitmapShader sh = new BitmapShader(t, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                float sc = Math.max(cw / t.getWidth(), ch / t.getHeight());
+                matrix.setScale(sc, sc);
+                matrix.postTranslate(x + (cw - t.getWidth() * sc) / 2, y + (ch - t.getHeight() * sc) / 2);
                 sh.setLocalMatrix(matrix);
                 fill.setShader(sh);
-                c.drawRoundRect(r, 28 * k, 28 * k, fill);
-                fill.setShader(null);
             } else {
-                c.drawText("Renderizando fondo…", w / 2f, y + ih / 2 - 10 * k, sub);
-                float f = Math.max(0, Math.min(1, 1 - left / 700f));
-                fill.setColor(0x33FFFFFF);
-                r.set(x + 200 * k, y + ih / 2 + 20 * k, x + iw - 200 * k, y + ih / 2 + 32 * k);
-                c.drawRoundRect(r, 6 * k, 6 * k, fill);
-                fill.setColor(0xFFFFFFFF);
-                r.right = r.left + (iw - 400 * k) * f;
-                c.drawRoundRect(r, 6 * k, 6 * k, fill);
-                postInvalidateDelayed(40);
+                fill.setColor(0xFF2A0A12);
             }
+            c.drawRoundRect(r, rad, rad, fill);
+            fill.setShader(null);
+        }
+
+        /** The card that rises from the bottom edge, the trash on it, and the picture that flies into it and fills it. */
+        private void drawSheet(Canvas c, int w, int h, long now, float flyT) {
+            float p = sheetProgress(now);
+            float sh = 250 * k, top = h - sh * p;
+            fill.setColor(0x99000000);
+            c.drawRect(0, 0, w, top, fill);
+            fill.setColor(0xFF000000);
+            fill.setShader(new android.graphics.LinearGradient(0, top, 0, h, 0xFF3A0C16, 0xFF0A0306, Shader.TileMode.CLAMP));
+            RectF card = new RectF(w / 2f - 560 * k, top, w / 2f + 560 * k, h + 60 * k);
+            c.drawRoundRect(card, 56 * k, 56 * k, fill);
+            fill.setShader(null);
             fill.setStyle(Paint.Style.STROKE);
-            fill.setStrokeWidth(4 * k);
-            fill.setColor(0x88FFFFFF);
-            r.set(x, y, x + iw, y + ih);
-            c.drawRoundRect(r, 28 * k, 28 * k, fill);
+            fill.setStrokeWidth(3.5f * k);
+            fill.setColor(0xFFF0121F);
+            c.drawRoundRect(card, 56 * k, 56 * k, fill);
             fill.setStyle(Paint.Style.FILL);
-            // the arrows, when more than one came
-            if (fresh.size() > 1) {
-                fill.setColor(0xFFFFFFFF);
-                float ay = y + ih / 2;
-                android.graphics.Path a = new android.graphics.Path();
-                a.moveTo(x - 30 * k, ay - 34 * k);
-                a.lineTo(x - 80 * k, ay);
-                a.lineTo(x - 30 * k, ay + 34 * k);
-                a.close();
-                c.drawPath(a, fill);
-                a.reset();
-                a.moveTo(x + iw + 30 * k, ay - 34 * k);
-                a.lineTo(x + iw + 80 * k, ay);
-                a.lineTo(x + iw + 30 * k, ay + 34 * k);
-                a.close();
-                c.drawPath(a, fill);
-                c.drawText((freshIndex + 1) + " de " + fresh.size(), w / 2f, y + ih + 50 * k, sub);
+            // the trash
+            float tx = card.left + 130 * k, ty = top + 125 * k;
+            float filled = deleteAt == 0 ? 0 : Math.max(0, Math.min(1, (flyT - 0.55f) / 0.45f));
+            drawTrash(c, tx, ty, filled, deleteAt != 0 && flyT < 0.6f);
+            if (deleteAt != 0) {
+                // the picture flies from its place into the trash, getting smaller
+                float e = flyT * flyT * (3 - 2 * flyT);
+                float cx = flyFrom.centerX() + (tx - flyFrom.centerX()) * e, cy = flyFrom.centerY() + (ty - 20 * k - flyFrom.centerY()) * e;
+                float s = 1 - 0.86f * e;
+                float pw = flyFrom.width() * s, ph = flyFrom.height() * s;
+                if (flyT < 0.97f) drawPicture(c, thumbs.get(sheetFor), cx - pw / 2, cy - ph / 2, pw, ph, 18 * k * s);
             }
-            // the buttons: whole or filling, accept, delete
-            float[] a2 = adj.get(id);
-            boolean filling = a2 == null || a2[0] == 0;
-            String[] labels = {filling ? "Ver entera" : "Llenar pantalla", "Aceptar", "Eliminar"};
-            label.setTextAlign(Paint.Align.CENTER);
-            label.setTextSize(30 * k);
-            float bw = 400 * k, gap = 24 * k, bx = (w - (3 * bw + 2 * gap)) / 2f, by = y + ih + 90 * k;
-            for (int i = 0; i < 3; i++) {
-                float bl = bx + i * (bw + gap);
-                r.set(bl, by, bl + bw, by + 76 * k);
-                boolean on = freshRow == 1 && freshBtn == i;
-                fill.setColor(i == 1 ? (on ? 0xFFFF2A3A : 0xFFC4101F) : i == 2 ? (on ? 0xFF8A1020 : 0x44FF3040) : (on ? 0x66FFFFFF : 0x28FFFFFF));
-                c.drawRoundRect(r, 38 * k, 38 * k, fill);
-                if (on) {
-                    fill.setStyle(Paint.Style.STROKE);
-                    fill.setStrokeWidth(4 * k);
-                    fill.setColor(0xFFFFFFFF);
-                    c.drawRoundRect(r, 38 * k, 38 * k, fill);
-                    fill.setStyle(Paint.Style.FILL);
+            // the words and the buttons
+            label.setTextSize(34 * k);
+            if (deleteAt == 0) {
+                c.drawText("Eliminar este fondo", card.left + 240 * k, top + 98 * k, label);
+                label.setTextSize(26 * k);
+                c.drawText("Se borra de tu TV.", card.left + 240 * k, top + 138 * k, sub);
+                for (int i = 0; i < 2; i++) {
+                    float bx = card.left + 240 * k + i * 380 * k;
+                    r.set(bx, top + 160 * k, bx + 350 * k, top + 230 * k);
+                    boolean on = sheetBtn == i;
+                    fill.setColor(i == 0 ? (on ? 0xFFFF2A3A : 0xFFC4101F) : (on ? 0x66FFFFFF : 0x28FFFFFF));
+                    c.drawRoundRect(r, 35 * k, 35 * k, fill);
+                    if (on) {
+                        fill.setStyle(Paint.Style.STROKE);
+                        fill.setStrokeWidth(4 * k);
+                        fill.setColor(0xFFFFFFFF);
+                        c.drawRoundRect(r, 35 * k, 35 * k, fill);
+                        fill.setStyle(Paint.Style.FILL);
+                    }
+                    c.drawText(i == 0 ? "Eliminar" : "Cancelar", r.centerX(), r.centerY() + 11 * k, btn);
                 }
-                c.drawText(labels[i], bl + bw / 2, by + 50 * k, label);
+            } else {
+                c.drawText(flyT >= 1 ? "Eliminado" : "Eliminando…", card.left + 240 * k, top + 150 * k, label);
             }
             label.setTextSize(26 * k);
-            label.setTextAlign(Paint.Align.LEFT);
-            head.setTextAlign(Paint.Align.LEFT);
-            sub.setTextAlign(Paint.Align.LEFT);
         }
 
-        private void drawCode(Canvas c, int w, int h) {
-            if (!fresh.isEmpty()) {
-                drawFresh(c, w, h);
-                return;
+        /** A trash can: the body, what is in it rising as it fills, and the lid (open while the picture goes in). */
+        private void drawTrash(Canvas c, float x, float y, float filled, boolean open) {
+            Path body = new Path();
+            body.moveTo(x - 46 * k, y - 22 * k);
+            body.lineTo(x + 46 * k, y - 22 * k);
+            body.lineTo(x + 38 * k, y + 56 * k);
+            body.lineTo(x - 38 * k, y + 56 * k);
+            body.close();
+            fill.setColor(0x33FFFFFF);
+            c.drawPath(body, fill);
+            if (filled > 0) {
+                c.save();
+                c.clipPath(body);
+                fill.setColor(0xFFE3122B);
+                c.drawRect(x - 50 * k, y + 56 * k - 78 * k * filled, x + 50 * k, y + 60 * k, fill);
+                c.restore();
             }
-            fill.setColor(0xE8000000);
-            c.drawRect(0, 0, w, h, fill);
-            float s = 460 * k, x = w / 2f - s - 40 * k, y = h / 2f - s / 2;
+            fill.setStyle(Paint.Style.STROKE);
+            fill.setStrokeWidth(5 * k);
+            fill.setStrokeJoin(Paint.Join.ROUND);
             fill.setColor(0xFFFFFFFF);
-            r.set(x - 24 * k, y - 24 * k, x + s + 24 * k, y + s + 24 * k);
-            c.drawRoundRect(r, 28 * k, 28 * k, fill);
-            if (qr != null) {
-                r.set(x, y, x + s, y + s);
-                fill.setFilterBitmap(false);
-                c.drawBitmap(qr, null, r, fill);
-                fill.setFilterBitmap(true);
-            }
-            float tx = w / 2f + 40 * k;
-            head.setTextSize(50 * k);
-            c.drawText("Agrega tus fondos", tx, y + 70 * k, head);
-            head.setTextSize(58 * k);
-            sub.setTextSize(30 * k);
-            c.drawText("1. Apunta la cámara del celular al código.", tx, y + 150 * k, sub);
-            c.drawText("2. Toca el enlace y elige tus fotos.", tx, y + 200 * k, sub);
-            c.drawText("3. Aparecen aquí solas.", tx, y + 250 * k, sub);
-            sub.setTextSize(24 * k);
-            c.drawText("El celular debe estar en el mismo Wi-Fi.", tx, y + 320 * k, sub);
-            c.drawText("Atrás para cerrar.", tx, y + 360 * k, sub);
-            sub.setTextSize(28 * k);
-        }
-    }
-
-    /** A QR code's modules as a small bitmap with a quiet margin. */
-    private static final class Qrs {
-        static Bitmap bitmap(boolean[][] m) {
-            int n = m.length, q = 2;
-            int[] px = new int[(n + 2 * q) * (n + 2 * q)];
-            Arrays.fill(px, 0xFFFFFFFF);
-            for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) if (m[y][x]) px[(y + q) * (n + 2 * q) + x + q] = 0xFF000000;
-            return Bitmap.createBitmap(px, n + 2 * q, n + 2 * q, Bitmap.Config.ARGB_8888);
+            c.drawPath(body, fill);
+            fill.setStyle(Paint.Style.FILL);
+            c.save();
+            if (open) c.rotate(-24, x - 52 * k, y - 28 * k);
+            fill.setColor(0xFFFFFFFF);
+            r.set(x - 56 * k, y - 36 * k, x + 56 * k, y - 26 * k);
+            c.drawRoundRect(r, 5 * k, 5 * k, fill);
+            r.set(x - 14 * k, y - 48 * k, x + 14 * k, y - 36 * k);
+            c.drawRoundRect(r, 5 * k, 5 * k, fill);
+            c.restore();
         }
     }
 }

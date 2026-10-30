@@ -234,6 +234,7 @@ public class TianSettingsActivity extends Activity {
                     break;
                 default:
                     if (e.getRepeatCount() > 0) return true;
+                    Click.playOpen(getContext());
                     if (focus == 0) startActivity(new Intent(getContext(), WallpaperActivity.class));
                     else if (focus == 7) startActivity(new Intent(getContext(), SettingsActivity.class));
                     else if (focus == 8) open(new Intent(Settings.ACTION_SETTINGS));

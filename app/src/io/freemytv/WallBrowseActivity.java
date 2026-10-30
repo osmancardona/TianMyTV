@@ -46,7 +46,7 @@ public class WallBrowseActivity extends Activity {
     private static final String API = "https://wallhaven.cc/api/v1/search";
     private static final String FULL = "https://w.wallhaven.cc/full/";
     private static final String[][] CATEGORIES = {   // label, search, sorting
-        {"Populares", "", "toplist"}, {"Demonios", "demon", "toplist"}, {"Terror", "horror", "toplist"}, {"Gótico", "gothic dark", "toplist"},
+        {"Populares", "", "toplist"}, {"Dios", "god", "relevance"}, {"Virgen", "virgin mary guadalupe", "relevance"}, {"Demonios", "demon", "toplist"}, {"Terror", "horror", "toplist"}, {"Gótico", "gothic dark", "toplist"},
         {"Anime", "anime", "toplist"}, {"Juegos", "video game", "toplist"}, {"Autos", "car", "toplist"}, {"Espacio", "space", "toplist"},
         {"Oscuro", "dark", "toplist"}, {"Naturaleza", "nature", "toplist"}, {"Ciudad", "city night", "toplist"}, {"Abstracto", "abstract", "toplist"},
         {"Buscar…", null, null},
@@ -54,6 +54,8 @@ public class WallBrowseActivity extends Activity {
 
     private static final class Item {
         String id, thumb, full, res;
+        boolean commons;
+        int width, height;
         long size;
         Bitmap bmp;
         boolean loading;
@@ -114,19 +116,47 @@ public class WallBrowseActivity extends Activity {
         more();
     }
 
-    /** The next page of the search. */
+    /** Spanish words people type, in the English the catalogs understand. */
+    static String english(String q) {
+        String t = java.text.Normalizer.normalize(q.toLowerCase(java.util.Locale.ROOT), java.text.Normalizer.Form.NFD).replaceAll("\\p{M}", "").trim();
+        String[][] phrases = {{"virgen de guadalupe", "our lady of guadalupe"}, {"santa muerte", "santa muerte"}, {"virgen maria", "virgin mary"}, {"sagrado corazon", "sacred heart"}};
+        for (String[] p : phrases) if (t.contains(p[0])) return t.replace(p[0], p[1]);
+        String[][] words = {{"dios", "god"}, {"virgen", "virgin mary"}, {"jesus", "jesus christ"}, {"cristo", "christ"}, {"angel", "angel"}, {"angeles", "angels"},
+            {"cruz", "cross"}, {"iglesia", "church"}, {"catedral", "cathedral"}, {"santo", "saint"}, {"santa", "saint"}, {"maria", "mary"}, {"calavera", "skull"},
+            {"muerte", "death"}, {"demonio", "demon"}, {"demonios", "demon"}, {"diablo", "devil"}, {"infierno", "hell"}, {"cielo", "sky"}, {"dragon", "dragon"},
+            {"lobo", "wolf"}, {"leon", "lion"}, {"tigre", "tiger"}, {"aguila", "eagle"}, {"mar", "sea"}, {"playa", "beach"}, {"montana", "mountain"},
+            {"montanas", "mountains"}, {"bosque", "forest"}, {"ciudad", "city"}, {"noche", "night"}, {"espacio", "space"}, {"luna", "moon"}, {"sol", "sun"},
+            {"fuego", "fire"}, {"agua", "water"}, {"flores", "flowers"}, {"flor", "flower"}, {"carro", "car"}, {"coche", "car"}, {"auto", "car"}, {"autos", "car"},
+            {"moto", "motorcycle"}, {"gato", "cat"}, {"perro", "dog"}, {"caballo", "horse"}, {"guerrero", "warrior"}, {"oscuro", "dark"}, {"terror", "horror"},
+            {"gotico", "gothic"}, {"juegos", "video game"}, {"videojuego", "video game"}, {"naturaleza", "nature"}, {"abstracto", "abstract"}, {"rosa", "rose"},
+            {"rosas", "roses"}, {"mujer", "woman"}, {"guadalupe", "guadalupe"}};
+        StringBuilder out = new StringBuilder();
+        for (String w : t.split("\\s+")) {
+            String r = w;
+            for (String[] p : words) if (p[0].equals(w)) { r = p[1]; break; }
+            out.append(out.length() == 0 ? "" : " ").append(r);
+        }
+        return out.toString();
+    }
+
+    private static final String UA = "TianDemonTV/0.18 (https://github.com/osmancardona/TianMyTV)";
+
+    /** The next page of the search: wallhaven.cc and Wikimedia Commons, one picture of each in turn. */
     private void more() {
         if (fetching || page >= lastPage) return;
         fetching = true;
         final int want = page + 1;
         final String q = query, s = sorting;
         net.execute(() -> {
+            List<Item> wh = new ArrayList<>(), cm = new ArrayList<>();
+            int whLast = 1;
+            boolean cmMore = false;
+            String en = english(q);
             try {
-                String url = API + "?q=" + URLEncoder.encode(q, "UTF-8") + "&categories=110&purity=100&atleast=1920x1080&ratios=16x9&sorting="
+                String url = API + "?q=" + URLEncoder.encode(en, "UTF-8") + "&categories=110&purity=100&atleast=1920x1080&ratios=16x9&sorting="
                         + s + (s.equals("toplist") ? "&topRange=1y" : "") + "&page=" + want;
                 JSONObject o = new JSONObject(text(open(url)));
                 JSONArray data = o.getJSONArray("data");
-                List<Item> got = new ArrayList<>();
                 for (int i = 0; i < data.length(); i++) {
                     JSONObject d = data.getJSONObject(i);
                     Item it = new Item();
@@ -136,29 +166,70 @@ public class WallBrowseActivity extends Activity {
                     it.size = d.optLong("file_size");
                     it.thumb = d.getJSONObject("thumbs").optString("large", d.getJSONObject("thumbs").optString("small"));
                     if (it.size > 18_000_000L) continue;   // a picture that heavy is slow to bring, and no sharper on this TV
-                    if (it.full.startsWith(FULL) && it.thumb.startsWith("https://th.wallhaven.cc/")) got.add(it);
+                    if (it.full.startsWith(FULL) && it.thumb.startsWith("https://th.wallhaven.cc/")) wh.add(it);
                 }
-                final int last = o.getJSONObject("meta").optInt("last_page", want);
-                ui.post(() -> {
-                    if (!q.equals(query) || !s.equals(sorting)) {
-                        fetching = false;
-                        return;
-                    }
-                    items.addAll(got);
-                    page = want;
-                    lastPage = Math.max(1, last);
-                    fetching = false;
-                    view.invalidate();
-                    for (Item it : got) thumb(it);
-                });
+                whLast = Math.max(1, o.getJSONObject("meta").optInt("last_page", want));
             } catch (Exception e) {
-                AppLog.w("catalog: " + e.getMessage());
-                ui.post(() -> {
-                    fetching = false;
-                    if (items.isEmpty()) failed = true;
-                    view.invalidate();
-                });
+                AppLog.w("catalog: wallhaven: " + e.getMessage());
             }
+            if (!en.isEmpty()) {
+                try {
+                    String url = "https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrnamespace=6&gsrlimit=24&gsroffset="
+                            + (want - 1) * 24 + "&gsrsearch=" + URLEncoder.encode(en + " filetype:bitmap", "UTF-8")
+                            + "&prop=imageinfo&iiprop=url%7Csize%7Cmime&iiurlwidth=1920";
+                    JSONObject o = new JSONObject(text(open(url)));
+                    JSONObject pages = o.optJSONObject("query") == null ? null : o.getJSONObject("query").optJSONObject("pages");
+                    if (pages != null) {
+                        List<JSONObject> list = new ArrayList<>();
+                        java.util.Iterator<String> keys = pages.keys();
+                        while (keys.hasNext()) list.add(pages.getJSONObject(keys.next()));
+                        java.util.Collections.sort(list, (x, y) -> Integer.compare(x.optInt("index"), y.optInt("index")));
+                        cmMore = list.size() >= 20;
+                        for (JSONObject pg : list) {
+                            JSONArray info = pg.optJSONArray("imageinfo");
+                            if (info == null || info.length() == 0) continue;
+                            JSONObject ii = info.getJSONObject(0);
+                            String mime = ii.optString("mime");
+                            int width = ii.optInt("width"), height = ii.optInt("height");
+                            if (!(mime.equals("image/jpeg") || mime.equals("image/png")) || width < 1400 || height < 700 || ii.optLong("size") > 40_000_000L) continue;
+                            String thumbUrl = ii.optString("thumburl"), original = ii.optString("url");
+                            Item it = new Item();
+                            it.commons = true;
+                            it.id = "cm" + pg.optInt("pageid");
+                            it.full = width > 1920 && thumbUrl.startsWith("https://upload.wikimedia.org/") ? thumbUrl : original;
+                            it.thumb = thumbUrl.contains("/1920px-") ? thumbUrl.replace("/1920px-", "/500px-") : it.full;
+                            it.width = width;
+                            it.height = height;
+                            it.res = width + "x" + height;
+                            it.size = ii.optLong("size");
+                            if (it.full.startsWith("https://upload.wikimedia.org/")) cm.add(it);
+                        }
+                    }
+                } catch (Exception e) {
+                    AppLog.w("catalog: commons: " + e.getMessage());
+                }
+            }
+            final List<Item> got = new ArrayList<>();
+            for (int i = 0; i < Math.max(wh.size(), cm.size()); i++) {
+                if (i < wh.size()) got.add(wh.get(i));
+                if (i < cm.size()) got.add(cm.get(i));
+            }
+            final int last = Math.max(whLast, cmMore ? want + 1 : 1);
+            final boolean any = !got.isEmpty();
+            ui.post(() -> {
+                if (!q.equals(query) || !s.equals(sorting)) {
+                    fetching = false;
+                    return;
+                }
+                items.addAll(got);
+                page = want;
+                lastPage = Math.max(1, last);
+                if (!any && want > 1) lastPage = want;
+                fetching = false;
+                if (!any && items.isEmpty()) failed = false;
+                view.invalidate();
+                for (Item it : got) thumb(it);
+            });
         });
     }
 
@@ -183,7 +254,7 @@ public class WallBrowseActivity extends Activity {
         HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
         h.setConnectTimeout(8000);
         h.setReadTimeout(15_000);
-        h.setRequestProperty("User-Agent", "TianDemonTV");
+        h.setRequestProperty("User-Agent", UA);
         if (h.getResponseCode() != 200) throw new IOException("HTTP " + h.getResponseCode());
         return h.getInputStream();
     }
@@ -208,10 +279,11 @@ public class WallBrowseActivity extends Activity {
         net.execute(() -> {
             try {
                 File tmp = new File(app.getCacheDir(), "wh.tmp");
+                if (!it.full.startsWith(FULL) && !it.full.startsWith("https://upload.wikimedia.org/")) throw new IOException("host");
                 HttpURLConnection h = (HttpURLConnection) new URL(it.full).openConnection();
                 h.setConnectTimeout(8000);
                 h.setReadTimeout(20_000);
-                h.setRequestProperty("User-Agent", "TianDemonTV");
+                h.setRequestProperty("User-Agent", UA);
                 if (h.getResponseCode() != 200) throw new IOException("HTTP " + h.getResponseCode());
                 long total = h.getContentLengthLong();
                 if (total > 20_000_000L) throw new IOException("too big");
@@ -245,11 +317,12 @@ public class WallBrowseActivity extends Activity {
                 Bitmap b = BitmapFactory.decodeFile(tmp.getPath(), o);
                 tmp.delete();
                 if (b == null) throw new IOException("unreadable");
-                String id = "w-wh-" + it.id + ".jpg";
+                String id = (it.commons ? "w-cm-" : "w-wh-") + it.id + ".jpg";
                 try (OutputStream out = new FileOutputStream(new File(WallpaperActivity.dir(app), "o-" + id))) {
                     b.compress(Bitmap.CompressFormat.JPEG, 95, out);
                 }
-                if (!WallpaperActivity.render(app, id, 0, 0.5f)) throw new IOException("render");
+                float ratio = b.getWidth() / (float) b.getHeight();   // wide ones fill the screen; tall ones stay whole over a soft copy
+                if (!WallpaperActivity.render(app, id, ratio >= 1.45f ? 0 : 1, ratio >= 1.45f ? WallpaperActivity.smartOffset(b) : 0.5f)) throw new IOException("render");
                 WallpaperActivity.applyFile(app, id);
                 ui.post(() -> {
                     busy = false;
@@ -381,7 +454,7 @@ public class WallBrowseActivity extends Activity {
             fill.setShader(null);
             c.drawText("Catálogo de fondos", 98 * k, 100 * k, title);
             small.setTextAlign(Paint.Align.RIGHT);
-            c.drawText("Imágenes seguras 16:9 de wallhaven.cc", w - 98 * k, 96 * k, small);
+            c.drawText("Fondos de wallhaven.cc y Wikimedia Commons", w - 98 * k, 96 * k, small);
             small.setTextAlign(Paint.Align.LEFT);
             // the categories, scrolled so the picked one shows
             float x = 98 * k, cy = 150 * k;

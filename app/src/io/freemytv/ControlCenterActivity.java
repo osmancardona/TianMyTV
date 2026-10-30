@@ -291,7 +291,10 @@ public class ControlCenterActivity extends Activity {
                     if (e.getRepeatCount() > 0) return true;
                     if (cur.kind == 2) watch.control(Integer.parseInt(cur.id.substring(1)));
                     else if (cur.kind == 4) mute();
-                    else activate(cur.id);
+                    else {
+                        Click.playOpen(ControlCenterActivity.this);
+                        activate(cur.id);
+                    }
                     invalidate();
                     return true;
             }
