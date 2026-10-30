@@ -688,6 +688,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     void resume() {
         if (running) return;
         running = true;
+        layoutShelf();   // what the editor changed
+        TianUpdate.maybeShow(getContext());
+        setLightButtons(HomeApps.topButtons());
+        heroDirty = statusDirty = tilesDirty = true;
         checkNight(false);
         boolean h24 = Ui.h24();
         if (h24 != clock24) {   // 12/24 hours changed (the TV's or the Clock row's): the clock and the drawer's times again
@@ -797,7 +801,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** The round buttons at the top right (Settings > Top Buttons), with their names in the current language. */
     private void setLightButtons(List<HomeApps.Item> list) {
         lightButtons.clear();
-        lightButtons.addAll(list);
+        for (HomeApps.Item li : list) {
+            String bk = li.kind == HomeApps.TIAN ? "b0" : li.kind == HomeApps.CONTROL ? "b1" : li.kind == HomeApps.MUSIC ? "b2" : null;
+            if (bk == null || Prefs.lay(bk + "H", 0) == 0) lightButtons.add(li);
+        }
         if (zone == Z_TOP && topIndex >= 3 + lightButtons.size()) {
             topIndex = 2 + lightButtons.size();
             if (topIndex < 3 && !picksOn()) zone = Z_SHELF;   // without the picks the tabs can't hold focus
@@ -841,7 +848,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         int width = MeasureSpec.getSize(widthSpec), height = MeasureSpec.getSize(heightSpec);
         float kk = width / 1920f;
         measure(sky, width, height);
-        measure(heroLayer, width, Math.round(790 * kk));
+        measure(heroLayer, width, Math.round(1080 * kk));
         // The icons at the top left need the whole width; with them off the layer keeps its old size (the corner buttons
         // only), so the GPU still composites a small layer.
         statusWide = Prefs.statusIcons();
@@ -849,7 +856,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Sized to what they draw (the glass and its shadow; the grown tiles and their shadows): smaller layers are
         // cheaper for the GPU to composite on every frame of the drawer animation.
         measure(platter, width, Math.round(320 * kk));
-        measure(tiles, width, Math.round(400 * kk));
+        measure(tiles, width, Math.round(840 * kk));
         measure(drawerLayer, width, Math.round(600 * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
@@ -869,7 +876,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         place(heroLayer, 0, 0);
         place(status, statusWide ? 0 : width - status.getMeasuredWidth(), 0);
         place(platter, 0, Math.round(750 * kk));
-        place(tiles, 0, Math.round(660 * kk));
+        place(tiles, 0, Math.round(240 * kk));
         place(drawerLayer, 0, Math.round(470 * kk));
         sheetLayer.layout(0, 0, width, height);
         menuLayer.layout(0, 0, width, height);
@@ -1631,10 +1638,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float full = (CONTENT_R - MARGIN) * k;
         // Tiles in the TV banners' own 16:9, so an app's art is never stretched; never taller than L_TILE_H. The glass
         // keeps its bottom edge, so with more apps it only gets lower.
-        float tw = Math.min(190 * k, (full - Math.max(0, n - 1) * gap) / Math.max(1, n));
+        float tw = Math.min(190 * k * Prefs.lay("shelfS", 1), (full - Math.max(0, n - 1) * gap) / Math.max(1, n));
         float th = tw;   // square icons
         float width = n * tw + Math.max(0, n - 1) * gap, left = (w - width) / 2f;
-        float top = (L_PLATTER_TOP + L_TILE_H) * k - th + 10 * k;
+        left += Prefs.lay("shelfX", 0) * k;
+        float top = (L_PLATTER_TOP + L_TILE_H) * k - th + 10 * k + Prefs.lay("shelfY", 0) * k;
         platterRect.set(left - pad, top, left + width + pad, top + th + 2 * pad);
         snap(platterRect);
         shelfFirst = Math.max(0, Math.min(shelfFirst, shelf.size() - n));
@@ -1796,7 +1804,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private BitmapShader cardArtShader;
 
     private boolean mediaOn() {
-        return clockMode() && Prefs.nowPlaying() && playing.cardTitle != null && playing.card != null;
+        return clockMode() && Prefs.nowPlaying() && playing.cardTitle != null && playing.card != null && Prefs.lay("musicH", 0) == 0;
     }
 
     /** Moves in the music pill (zone Z_MEDIA): mediaIndex 3 is the pill, 0 to 2 the buttons under it once opened. */
@@ -1859,6 +1867,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     };
 
     private void drawMediaCard(Canvas c) {
+        float s = Prefs.lay("musicS", 1);
+        c.save();
+        c.translate(Prefs.lay("musicX", 0) * k, Prefs.lay("musicY", 0) * k);
+        c.scale(s, s, CARD_L * k, CARD_T * k);
+        drawMediaCardBody(c);
+        c.restore();
+    }
+
+    private void drawMediaCardBody(Canvas c) {
         if (!mediaOn() || cardTitleFit == null) return;
         float left = CARD_L * k, top = CARD_T * k;
         float art = CARD_ART * k, ax = left, ay = top;
@@ -2048,6 +2065,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (zone == Z_SHELF && shelfIndex >= 0 && shelfIndex < shelf.size()) {
             RectF fr = tileRects[shelfIndex];
             float fv = Ui.clamp(tileFocus[shelfIndex].value), grow = fr.height() * (1 + FOCUS_GROW * fv) / 2;
+            shelfName.setTextSize(21 * k * Math.max(0.8f, Math.min(1.4f, Prefs.lay("shelfS", 1))));
             shelfName.setAlpha(Math.round(255 * Math.min(1, fv * 1.5f)));
             String name = shelf.get(shelfIndex).label;
             if (name != null) c.drawText(name, fr.centerX(), fr.centerY() + grow + 38 * k, shelfName);
@@ -4108,6 +4126,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float b = L_BUTTON * k, right = CONTENT_R * k, cy = L_BUTTON_CY * k;
         for (int i = lightButtons.size() - 1; i >= 0; i--) {
             topRects[3 + i].set(right - b, cy - b / 2, right, cy + b / 2);
+            HomeApps.Item li = lightButtons.get(i);
+            String bk = li.kind == HomeApps.TIAN ? "b0" : li.kind == HomeApps.CONTROL ? "b1" : "b2";
+            topRects[3 + i].offset(Prefs.lay(bk + "X", 0) * k, Prefs.lay(bk + "Y", 0) * k);
+            topRects[3 + i].inset(-(Prefs.lay(bk + "S", 1) - 1) * b / 2, -(Prefs.lay(bk + "S", 1) - 1) * b / 2);
             right -= b + L_BUTTON_GAP * k;
         }
         float top = L_CARDS_TOP * k, ch = L_CARD_H * k, g = L_CARD_GAP * k, left = MARGIN * k, tall = L_TALL_W * k;
@@ -4785,6 +4807,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void drawClock(Canvas c) {
+        if (Prefs.lay("clockH", 0) > 0) return;
+        float s = Prefs.lay("clockS", 1);
+        c.save();
+        c.translate(Prefs.lay("clockX", 0) * k, Prefs.lay("clockY", 0) * k);
+        c.scale(s, s, MARGIN * k, 176 * k);
+        drawClockBody(c);
+        c.restore();
+    }
+
+    private void drawClockBody(Canvas c) {
         float x = MARGIN * k;
         long minute = System.currentTimeMillis() / 60000;
         if (minute != ampmMinute) {

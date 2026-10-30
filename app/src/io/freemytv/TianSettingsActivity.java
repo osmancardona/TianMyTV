@@ -77,7 +77,7 @@ public class TianSettingsActivity extends Activity {
 
     private final class SettingsView extends View {
         private final float k;
-        private final String[] labels = {"Fondo de pantalla", "Tema", "Reloj", "Clima", "Ciudad", "Apagar el TV en", "Apagar cada noche a las", "Estante, botones y más", "Ajustes de Android"};
+        private final String[] labels = {"Fondo de pantalla", "Tema", "Reloj", "Clima", "Ciudad", "Apagar el TV en", "Apagar cada noche a las", "Estante, botones y más", "Ajustes de Android", "Editor de pantalla", "Buscar actualización"};
         private int focus;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint title = Ui.text(Ui.displaySemibold, 1, 0xFFFFFFFF), label = Ui.text(Ui.semibold, 1, 0xFFFFFFFF),
@@ -91,7 +91,7 @@ public class TianSettingsActivity extends Activity {
             k = dm.widthPixels / 1920f;
             setFocusable(true);
             title.setTextSize(54 * k);
-            label.setTextSize(34 * k);
+            label.setTextSize(32 * k);
             value.setTextSize(32 * k);
             small.setTextSize(26 * k);
             title.setTextAlign(Paint.Align.CENTER);
@@ -106,6 +106,35 @@ public class TianSettingsActivity extends Activity {
             } catch (IOException | RuntimeException | OutOfMemoryError e) {
                 logo = null;
             }
+        }
+
+        private String updateText = "Versión " + Updates.installedVersion(getContext());
+        private boolean looking;
+
+        private void lookForUpdate() {
+            if (looking) return;
+            looking = true;
+            updateText = "Buscando…";
+            invalidate();
+            final Context c = getContext().getApplicationContext();
+            new Thread(() -> {
+                String text;
+                TianUpdate.Info info = null;
+                try {
+                    info = TianUpdate.check(c);
+                    text = info == null ? "Ya tienes la última" : "Hay una nueva: " + info.version;
+                } catch (IOException | RuntimeException e) {
+                    text = "Sin conexión";
+                }
+                final String shown = text;
+                final TianUpdate.Info found = info;
+                post(() -> {
+                    looking = false;
+                    updateText = shown;
+                    invalidate();
+                    if (found != null) startActivity(TianUpdate.screen(c, found));
+                });
+            }, "TianUpdateCheck").start();
         }
 
         private int daily() {
@@ -125,6 +154,7 @@ public class TianSettingsActivity extends Activity {
                 case 1: return Prefs.theme().equals("dark") ? "Oscuro" : Prefs.theme().equals("light") ? "Claro" : "Automático";
                 case 2: return Prefs.clockFormat().equals("24") ? "24 horas" : "12 horas";
                 case 3: return Prefs.weather() ? "Con clima" : "Sin clima";
+                case 10: return updateText;
                 case 4: return Prefs.city().isEmpty() ? "Sin elegir" : Prefs.city();
                 case 5: {
                     int left = SleepTimer.minutesLeft(getContext());
@@ -207,6 +237,8 @@ public class TianSettingsActivity extends Activity {
                     if (focus == 0) startActivity(new Intent(getContext(), WallpaperActivity.class));
                     else if (focus == 7) startActivity(new Intent(getContext(), SettingsActivity.class));
                     else if (focus == 8) open(new Intent(Settings.ACTION_SETTINGS));
+                    else if (focus == 9) startActivity(new Intent(getContext(), EditorActivity.class));
+                    else if (focus == 10) lookForUpdate();
                     else change(1);
                     break;
             }
@@ -233,7 +265,7 @@ public class TianSettingsActivity extends Activity {
             c.drawText("Tian Demon TV", cx, 720 * k, title);
             c.drawText("Versión 0.1", cx, 770 * k, small);
             // on the right: the rows
-            float left = 1000 * k, right = 1800 * k, top = 110 * k, rh = 86 * k, gap = 10 * k;
+            float left = 1000 * k, right = 1800 * k, top = 56 * k, rh = 76 * k, gap = 7 * k;
             for (int i = 0; i < labels.length; i++) {
                 float y = top + i * (rh + gap);
                 r.set(left, y, right, y + rh);

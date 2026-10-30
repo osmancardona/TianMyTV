@@ -245,6 +245,13 @@ final class Prefs {
     static String latitude() { return sp().getString("latitude", Place.latitude()); }
     static String longitude() { return sp().getString("longitude", Place.longitude()); }
 
+    /** The editor's choices: where the clock, the music and the apps sit and how big (0 and 1 are the usual place and size). */
+    static float lay(String key, float def) { return sp().getFloat("lay_" + key, def); }
+    static void setLay(String key, float value) {
+        sp().edit().putFloat("lay_" + key, value).apply();
+        version++;
+    }
+
     static void setCity(String name, String latitude, String longitude) {
         sp().edit().putString("city", name).putString("latitude", latitude).putString("longitude", longitude).apply();
         version++;

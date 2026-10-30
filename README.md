@@ -9,6 +9,8 @@ Basada en [Free My TV](https://github.com/simbasjungles/free-my-tv) (licencia MI
 - Centro de control (engranaje): música, Wi-Fi, Bluetooth, audio, volumen, accesos rápidos, RAM y espacio.
 - Fondos de pantalla propios: se agregan desde el celular con un código QR.
 - Temporizador para apagar el TV (en X minutos, o cada noche a una hora).
+- Editor de pantalla: mueve, cambia el tamaño u oculta el reloj, la música, las apps y los botones.
+- Avisa cuando hay una versión nueva, con botón para actualizar.
 - Ajustes cortos: tema, reloj, clima, ciudad.
 
 ## Instalar en el TV (con Downloader)
@@ -16,7 +18,7 @@ Basada en [Free My TV](https://github.com/simbasjungles/free-my-tv) (licencia MI
 1. Instala **Downloader** en el TV.
 2. Abre Downloader y escribe este enlace:
 
-   `https://github.com/osmancardona/TianMyTV/releases/download/v0.1/TianMyTV.apk`
+   `https://github.com/osmancardona/TianMyTV/releases/latest/download/TianMyTV.apk`
 
 3. Descarga e instala (permite instalar apps de Downloader cuando el TV lo pida).
 4. Activa **Opciones de desarrollador → Depuración USB** en el TV (la app la usa para ser tu pantalla de inicio).
