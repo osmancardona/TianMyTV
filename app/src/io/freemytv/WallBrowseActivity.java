@@ -94,6 +94,7 @@ public class WallBrowseActivity extends Activity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP) Click.playBack(this);
         if (((BrowseView) view).onKey(e)) return true;
         return super.dispatchKeyEvent(e);
     }
@@ -191,7 +192,9 @@ public class WallBrowseActivity extends Activity {
                             JSONObject ii = info.getJSONObject(0);
                             String mime = ii.optString("mime");
                             int width = ii.optInt("width"), height = ii.optInt("height");
-                            if (!(mime.equals("image/jpeg") || mime.equals("image/png")) || width < 1400 || height < 700 || ii.optLong("size") > 40_000_000L) continue;
+                            // only horizontal pictures: a TV is wide, and a tall one leaves empty sides
+                            if (!(mime.equals("image/jpeg") || mime.equals("image/png")) || width < 1400 || height < 700 || width < height * 1.25f
+                                    || ii.optLong("size") > 40_000_000L) continue;
                             String thumbUrl = ii.optString("thumburl"), original = ii.optString("url");
                             Item it = new Item();
                             it.commons = true;
@@ -229,6 +232,7 @@ public class WallBrowseActivity extends Activity {
                 if (!any && items.isEmpty()) failed = false;
                 view.invalidate();
                 for (Item it : got) thumb(it);
+                if (items.size() < 12 && page < lastPage && page < 6) more();   // few passed the filters: the next page too
             });
         });
     }
@@ -322,7 +326,7 @@ public class WallBrowseActivity extends Activity {
                     b.compress(Bitmap.CompressFormat.JPEG, 95, out);
                 }
                 float ratio = b.getWidth() / (float) b.getHeight();   // wide ones fill the screen; tall ones stay whole over a soft copy
-                if (!WallpaperActivity.render(app, id, ratio >= 1.45f ? 0 : 1, ratio >= 1.45f ? WallpaperActivity.smartOffset(b) : 0.5f)) throw new IOException("render");
+                if (!WallpaperActivity.render(app, id, ratio >= 1.25f ? 0 : 1, ratio >= 1.25f ? WallpaperActivity.smartOffset(b) : 0.5f)) throw new IOException("render");
                 WallpaperActivity.applyFile(app, id);
                 ui.post(() -> {
                     busy = false;

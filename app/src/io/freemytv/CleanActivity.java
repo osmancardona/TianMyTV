@@ -64,6 +64,7 @@ public class CleanActivity extends Activity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP) Click.playBack(this);
         if (view.onKey(e)) return true;
         return super.dispatchKeyEvent(e);
     }

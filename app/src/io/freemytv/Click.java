@@ -23,7 +23,7 @@ import java.nio.ByteOrder;
 final class Click {
     private static final int RATE = 48_000;
     private volatile SoundPool pool;
-    private int move, open;
+    private int move, open, back;
     private final HandlerThread thread = new HandlerThread("click", Process.THREAD_PRIORITY_BACKGROUND);
     private final Handler handler;
 
@@ -36,6 +36,7 @@ final class Click {
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build();
             move = pool.load(fromAsset(c, "bubble-pop.wav"), 1);
             open = pool.load(chime(c, "chime-open.wav"), 1);
+            back = pool.load(chimeDown(c, "chime-back.wav"), 1);
         } catch (IOException | RuntimeException e) {
             AppLog.w("click sound unavailable: " + e.getMessage());
             release();
@@ -48,6 +49,20 @@ final class Click {
     static synchronized void playOpen(Context c) {
         if (shared == null) shared = new Click(c.getApplicationContext());
         shared.open();
+    }
+
+    /** Going back: the same bell with the two notes coming down. */
+    void back() {
+        if (pool == null || !Prefs.sounds()) return;
+        handler.post(() -> {
+            SoundPool p = pool;
+            if (p != null) p.play(back, 0.45f, 0.45f, 1, 0, 1f);
+        });
+    }
+
+    static synchronized void playBack(Context c) {
+        if (shared == null) shared = new Click(c.getApplicationContext());
+        shared.back();
     }
 
     void move() {
@@ -88,6 +103,26 @@ final class Click {
             double t = (double) i / RATE;
             double s = note(t, 0.0, 987.77) + note(t, 0.09, 1479.98);
             b.putShort((short) Math.round(Math.max(-1, Math.min(1, s)) * 0.6 * Short.MAX_VALUE));
+        }
+        try (FileOutputStream out = new FileOutputStream(f)) {
+            out.write(b.array());
+        }
+        return f.getPath();
+    }
+
+    private static String chimeDown(Context c, String name) throws IOException {
+        File f = new File(c.getCacheDir(), "v2-" + name);
+        if (f.exists() && f.length() > 44) return f.getPath();
+        int n = Math.round(RATE * 0.3f);
+        ByteBuffer b = ByteBuffer.allocate(44 + n * 2).order(ByteOrder.LITTLE_ENDIAN);
+        b.put("RIFF".getBytes("US-ASCII")).putInt(36 + n * 2).put("WAVE".getBytes("US-ASCII"));
+        b.put("fmt ".getBytes("US-ASCII")).putInt(16).putShort((short) 1).putShort((short) 1)
+                .putInt(RATE).putInt(RATE * 2).putShort((short) 2).putShort((short) 16);
+        b.put("data".getBytes("US-ASCII")).putInt(n * 2);
+        for (int i = 0; i < n; i++) {
+            double t = (double) i / RATE;
+            double s = note(t, 0.0, 1318.5) + note(t, 0.075, 880.0);
+            b.putShort((short) Math.round(Math.max(-1, Math.min(1, s)) * 0.55 * Short.MAX_VALUE));
         }
         try (FileOutputStream out = new FileOutputStream(f)) {
             out.write(b.array());
