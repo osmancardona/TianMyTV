@@ -58,7 +58,7 @@ final class HomeData {
     private static String weatherUrl() {
         return "https://api.open-meteo.com/v1/forecast?latitude=" + Prefs.latitude() + "&longitude=" + Prefs.longitude() + WEATHER_QUERY;
     }
-    private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L;
+    private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 60_000L;
     interface Listener { void onData(); }
 
     /** BTC, ETH and SOL; in Brazilian reais also the dollar (USDT/BRL), which Binance doesn't list for most currencies. */

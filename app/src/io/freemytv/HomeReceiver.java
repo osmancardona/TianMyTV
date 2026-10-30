@@ -36,7 +36,7 @@ public class HomeReceiver extends BroadcastReceiver {
             try {
                 work.run();
             } finally {
-                result.finish();
+                if (result != null) result.finish();
             }
         }).start();
     }

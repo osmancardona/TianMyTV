@@ -5100,7 +5100,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             }
         }
         if (sleepText.isEmpty()) return;
-        float right = (lightButtons.isEmpty() ? CONTENT_R * k : topRects[3].left) - 28 * k, cy = L_BUTTON_CY * k;
+        float right = (CONTENT_R - (L_BUTTON + L_BUTTON_GAP) * 3) * k - 8 * k, cy = L_BUTTON_CY * k;   // fixed: the editor doesn't move it
         float tw = lQuote.measureText(sleepText), size = lQuote.getTextSize();
         c.drawText(sleepText, right - tw, cy + Ui.halfCap(lQuote), lQuote);
         Symbols.draw(getContext(), c, "bedtime", right - tw - size * 0.9f, cy, size, lQuote.getColor());

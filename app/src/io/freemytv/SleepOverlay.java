@@ -32,6 +32,7 @@ public class SleepOverlay extends Service {
     private BitmapDrawable moon;
     private GradientDrawable pill;
     private long endsAt, sunrise, sunset;
+    private boolean daily;   // the nightly timer: shown only in its last 5 minutes
     private String theme = "auto", language;
 
     /** Settings > Sleep Timer > Position: the top center first, then around the screen. */
@@ -60,7 +61,7 @@ public class SleepOverlay extends Service {
         HomeData.Weather w = HomeData.get(c).weather;
         Intent i = new Intent(c, SleepOverlay.class).putExtra("endsAt", Prefs.sleepAt()).putExtra("place", Prefs.sleepPlace())
                 .putExtra("theme", Prefs.theme()).putExtra("sunrise", w.sunrise).putExtra("sunset", w.sunset)
-                .putExtra("language", Prefs.language());
+                .putExtra("language", Prefs.language()).putExtra("daily", SleepTimer.daily(c) >= 0);
         boolean wanted = Prefs.sleepShown() && SleepTimer.minutesLeft(c) > 0;
         if (wanted && Settings.canDrawOverlays(c)) {
             c.startForegroundService(i);
@@ -100,14 +101,24 @@ public class SleepOverlay extends Service {
                 stopSelf();
                 return;
             }
-            view.setText(Ui.trf("Off in {time}", "time", SleepTimer.duration((int) ((endsAt - now + 59_999) / 60_000))));
+            long left = endsAt - now;
+            if (daily && left > 300_000) {   // the nightly one speaks up 5 minutes before
+                view.setVisibility(android.view.View.GONE);
+                handler.postDelayed(this, 1000);
+                return;
+            }
+            view.setVisibility(android.view.View.VISIBLE);
+            long sec = (left + 999) / 1000;
+            String clock = sec >= 3600 ? String.format(java.util.Locale.US, "%d:%02d:%02d", sec / 3600, sec / 60 % 60, sec % 60)
+                    : String.format(java.util.Locale.US, "%d:%02d", sec / 60, sec % 60);
+            view.setText(Ui.trf("Off in {time}", "time", clock));
             // The home screen's glass: white with dark ink by day, smoked with light ink at night (Settings > Theme).
             boolean night = HomeData.isNight(theme, now, sunrise, sunset);
             int ink = night ? 0xEBFFFFFF : 0xFF1D1D1F;
             view.setTextColor(ink);
             moon.setTint(ink);
             pill.setColor(night ? 0xCC1C1C1E : 0xE6F5F5F7);
-            handler.postDelayed(this, 15_000);
+            handler.postDelayed(this, 1000);
         }
     };
 
@@ -148,6 +159,7 @@ public class SleepOverlay extends Service {
             return START_NOT_STICKY;
         }
         endsAt = intent.getLongExtra("endsAt", 0);
+        daily = intent.getBooleanExtra("daily", false);
         String lang = intent.getStringExtra("language");
         if (lang != null && !lang.equals(language)) {   // a new one from the settings: this process has its own catalogue
             language = lang;
