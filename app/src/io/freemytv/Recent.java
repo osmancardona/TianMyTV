@@ -47,7 +47,8 @@ final class Recent {
 
     private static final Runnable TICK = new Runnable() {
         @Override public void run() {
-            sweep();
+            sweep(true);
+            ART.execute(Recent::sweepScreen);
             H.postDelayed(this, TICK_MS);
         }
     };
@@ -78,8 +79,14 @@ final class Recent {
     }
 
     private static void sweep() {
+        sweep(false);
+    }
+
+    private static void sweep(boolean onlyPlaying) {
         for (MediaController mc : WATCHED) {
             try {
+                PlaybackState ps = mc.getPlaybackState();
+                if (onlyPlaying && (ps == null || ps.getState() != PlaybackState.STATE_PLAYING)) continue;
                 record(mc);
             } catch (RuntimeException e) {
                 AppLog.w("recent: " + e.getMessage());
@@ -109,6 +116,11 @@ final class Recent {
         if (dur > 0 && pos > dur) pos = dur;
         final MediaMetadata md = m;
         boolean done = dur > 0 && dur - pos < 15_000;   // finished: it leaves the row
+        store(pkg, title, sub, pos, dur, done);
+        saveArt(pkg, title, md);
+    }
+
+    private static void store(String pkg, String title, String sub, long pos, long dur, boolean done) {
         synchronized (Recent.class) {
             JSONArray old = read(app);
             JSONArray out = new JSONArray();
@@ -129,11 +141,69 @@ final class Recent {
             }
             write(out);
         }
-        saveArt(pkg, title, md);
+    }
+
+    // Apps that play without a media session (Xuper): the title is read from its own screen, with the TV's own debug
+    // connection (as Clean does), only while it is in front and something is playing.
+    /** A frame the TV could not capture (video layers can come out black): not worth keeping as a picture. */
+    private static boolean dark(android.graphics.Bitmap b) {
+        android.graphics.Bitmap t = android.graphics.Bitmap.createScaledBitmap(b, 16, 9, true);
+        long sum = 0;
+        for (int y = 0; y < 9; y++) {
+            for (int x = 0; x < 16; x++) {
+                int c = t.getPixel(x, y);
+                sum += ((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255);
+            }
+        }
+        return sum / (144 * 3) < 14;
+    }
+
+    private static boolean playingSession() {
+        for (MediaController mc : WATCHED) {
+            PlaybackState s = mc.getPlaybackState();
+            if (s != null && s.getState() == PlaybackState.STATE_PLAYING) return true;
+        }
+        return false;
+    }
+
+    private static void sweepScreen() {
+        try {
+            android.media.AudioManager am = app.getSystemService(android.media.AudioManager.class);
+            if (am == null || !am.isMusicActive()) return;
+            try (Adb adb = Adb.connect(app, 3000, null)) {
+                String top = adb.shell("dumpsys activity activities | grep -m1 topResumedActivity");
+                if (top == null || !top.contains("xupersbc") || !top.contains("VodDetailsActivity")) return;
+                String xml = adb.shell("uiautomator dump /sdcard/tian-u.xml >/dev/null 2>&1; cat /sdcard/tian-u.xml; rm -f /sdcard/tian-u.xml");
+                java.util.regex.Matcher mt = java.util.regex.Pattern
+                        .compile("<node [^>]*text=\"([^\"]*)\"[^>]*resource-id=\"[^\"]*:id/mTextTitle\"").matcher(xml == null ? "" : xml);
+                if (!mt.find()) return;
+                String title = mt.group(1).replace("&amp;", "&").replace("&quot;", "\"").replace("&apos;", "'").trim();
+                if (title.isEmpty()) return;
+                java.util.regex.Matcher mp = java.util.regex.Pattern.compile("u0 ([A-Za-z0-9_.]+)/").matcher(top);
+                if (!mp.find()) return;
+                String pkg = mp.group(1);
+                store(pkg, title, "", 0, 0, false);
+                File f = new File(app.getFilesDir(), artName(pkg, title));
+                if (!f.exists()) {
+                    String b64 = adb.shell("screencap -p | toybox base64 -w 0");
+                    byte[] png = b64 == null ? null : android.util.Base64.decode(b64.trim(), android.util.Base64.DEFAULT);
+                    android.graphics.Bitmap full = png == null ? null : android.graphics.BitmapFactory.decodeByteArray(png, 0, png.length);
+                    if (full != null && !dark(full)) {
+                        android.graphics.Bitmap x = android.graphics.Bitmap.createScaledBitmap(full, 640, 360, true);
+                        f.getParentFile().mkdirs();
+                        try (FileOutputStream out = new FileOutputStream(f)) {
+                            x.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out);
+                        }
+                    }
+                }
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            AppLog.w("recent screen: " + e.getMessage());
+        }
     }
 
     private static String artName(String pkg, String title) {
-        return "recent-art/" + Integer.toHexString((pkg + "|" + title).hashCode()) + ".jpg";
+        return "recent-art/v2-" + Integer.toHexString((pkg + "|" + title).hashCode()) + ".jpg";
     }
 
     /** The card's picture, kept once per title (in the background: it may need a download). */
