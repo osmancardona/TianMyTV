@@ -254,7 +254,7 @@ final class Photos {
                     AppLog.w("photos: skipped " + original + " (too small or unreadable)");
                 } else {
                     try (OutputStream os = new FileOutputStream(part)) {
-                        b.compress(Bitmap.CompressFormat.JPEG, 86, os);
+                        b.compress(Bitmap.CompressFormat.JPEG, 95, os);
                     }
                     b.recycle();
                     if (!part.renameTo(out)) throw new IOException("can't name " + out.getName());

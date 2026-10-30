@@ -142,7 +142,7 @@ public class WallpaperActivity extends Activity {
             in.mkdirs();
             File out = new File(in, "wallpaper.jpg");
             try (FileOutputStream f = new FileOutputStream(out)) {
-                b.compress(Bitmap.CompressFormat.JPEG, 92, f);
+                b.compress(Bitmap.CompressFormat.JPEG, 97, f);
             } catch (IOException e) {
                 AppLog.w("wallpaper: " + e.getMessage());
                 return;
@@ -281,44 +281,85 @@ public class WallpaperActivity extends Activity {
             }
         }
 
-        /** A picture of at least 640 px, cut down to 2112 × 1188 at most, saved as JPEG; its file name, or null. */
+        /**
+         * The picture as the TV shows it: turned the way it was taken (the phone's own turn is read from the file),
+         * kept at full quality and sized to the screen (2112 by 1188), whole: a picture that is not 16:9 sits in the middle
+         * over a soft dark copy of itself. Saved as JPEG; its file name, or null when it isn't a picture.
+         */
         private String save(File tmp) {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(tmp.getPath(), bounds);
-            if (bounds.outWidth < 640 || bounds.outHeight < 360) return null;
+            if (bounds.outWidth < 400 || bounds.outHeight < 300) return null;
+            // decoded no smaller than the screen needs: a phone's 12 megapixels are cut down once, well, not twice
             BitmapFactory.Options o = new BitmapFactory.Options();
-            o.inSampleSize = Math.max(1, Math.min(bounds.outWidth / 2112, bounds.outHeight / 1188));
+            int sample = 1;
+            while (bounds.outWidth / (sample * 2) >= Photos.W && bounds.outHeight / (sample * 2) >= Photos.H) sample *= 2;
+            o.inSampleSize = sample;
             Bitmap b = BitmapFactory.decodeFile(tmp.getPath(), o);
             if (b == null) return null;
-            // the screen is 16:9: a picture of that shape fills it; any other is kept whole, over a soft dark copy of itself
-            Bitmap screen = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888);
+            b = turned(tmp, b);
+            int tw = Photos.W, th = Photos.H;
+            Bitmap screen = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888);
             Canvas sc = new Canvas(screen);
-            Paint sp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+            Paint sp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
             float ratio = b.getWidth() / (float) b.getHeight();
-            RectF dst = new RectF(0, 0, 1920, 1080);
+            RectF dst = new RectF(0, 0, tw, th);
             if (Math.abs(ratio - 16f / 9) < 0.05f) {
-                sc.drawBitmap(b, null, dst, sp);
+                sc.drawBitmap(shrunk(b, tw, th), null, dst, sp);
             } else {
                 Bitmap tiny = Bitmap.createScaledBitmap(b, 32, Math.max(1, Math.round(32 / ratio)), true);
-                float cover = Math.max(1920f / tiny.getWidth(), 1080f / tiny.getHeight());
+                float cover = Math.max(tw / (float) tiny.getWidth(), th / (float) tiny.getHeight());
                 float cw = tiny.getWidth() * cover, chh = tiny.getHeight() * cover;
-                sc.drawBitmap(tiny, null, new RectF((1920 - cw) / 2, (1080 - chh) / 2, (1920 + cw) / 2, (1080 + chh) / 2), sp);
+                sc.drawBitmap(tiny, null, new RectF((tw - cw) / 2, (th - chh) / 2, (tw + cw) / 2, (th + chh) / 2), sp);
                 sp.setColor(0x88000000);
                 sc.drawRect(dst, sp);
                 sp.setColor(0xFFFFFFFF);
-                float fit = Math.min(1920f / b.getWidth(), 1080f / b.getHeight());
-                float fw = b.getWidth() * fit, fh = b.getHeight() * fit;
-                sc.drawBitmap(b, null, new RectF((1920 - fw) / 2, (1080 - fh) / 2, (1920 + fw) / 2, (1080 + fh) / 2), sp);
+                float fit = Math.min(tw / (float) b.getWidth(), th / (float) b.getHeight());
+                int fw = Math.round(b.getWidth() * fit), fh = Math.round(b.getHeight() * fit);
+                Bitmap whole = shrunk(b, fw, fh);
+                sc.drawBitmap(whole, null, new RectF((tw - fw) / 2f, (th - fh) / 2f, (tw + fw) / 2f, (th + fh) / 2f), sp);
             }
-            b = screen;
             String name = "w-" + System.currentTimeMillis() + ".jpg";
             try (FileOutputStream f = new FileOutputStream(new File(dir(app), name))) {
-                b.compress(Bitmap.CompressFormat.JPEG, 90, f);
+                screen.compress(Bitmap.CompressFormat.JPEG, 97, f);
             } catch (IOException e) {
                 return null;
             }
             return name;
+        }
+
+        /** Cut down in halves while it stays at least the target, then to it: sharper than one big step. */
+        private static Bitmap shrunk(Bitmap src, int tw, int th) {
+            Bitmap cur = src;
+            while (cur.getWidth() / 2 >= tw && cur.getHeight() / 2 >= th) {
+                cur = Bitmap.createScaledBitmap(cur, cur.getWidth() / 2, cur.getHeight() / 2, true);
+            }
+            if (cur.getWidth() != tw || cur.getHeight() != th) {
+                if (cur.getWidth() > tw || cur.getHeight() > th) cur = Bitmap.createScaledBitmap(cur, tw, th, true);
+            }
+            return cur;
+        }
+
+        /** The turn a phone wrote in the file (its camera held upright, sideways, or the front camera's mirror). */
+        private static Bitmap turned(File f, Bitmap b) {
+            try {
+                int o = new android.media.ExifInterface(f.getPath()).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1);
+                android.graphics.Matrix m = new android.graphics.Matrix();
+                switch (o) {
+                    case 2: m.setScale(-1, 1); break;
+                    case 3: m.setRotate(180); break;
+                    case 4: m.setScale(1, -1); break;
+                    case 5: m.setRotate(90); m.postScale(-1, 1); break;
+                    case 6: m.setRotate(90); break;
+                    case 7: m.setRotate(-90); m.postScale(-1, 1); break;
+                    case 8: m.setRotate(-90); break;
+                    default: return b;
+                }
+                return Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true);
+            } catch (IOException | RuntimeException e) {
+                return b;
+            }
         }
 
         private static void respond(OutputStream out, String status, String type, byte[] body) throws IOException {
