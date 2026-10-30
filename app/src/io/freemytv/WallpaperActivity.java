@@ -131,6 +131,107 @@ public class WallpaperActivity extends Activity {
         }
     }
 
+    /** A soft blur: three passes of a box (radius r) in each direction. */
+    private static Bitmap blurred(Bitmap src, int r) {
+        int w = src.getWidth(), h = src.getHeight();
+        int[] px = new int[w * h], tmp = new int[w * h];
+        src.getPixels(px, 0, w, 0, 0, w, h);
+        for (int pass = 0; pass < 3; pass++) {
+            box(px, tmp, w, h, r, true);
+            box(tmp, px, w, h, r, false);
+        }
+        Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        out.setPixels(px, 0, w, 0, 0, w, h);
+        return out;
+    }
+
+    private static void box(int[] in, int[] out, int w, int h, int r, boolean horizontal) {
+        int n = horizontal ? w : h, lines = horizontal ? h : w, step = horizontal ? 1 : w, lineStep = horizontal ? w : 1;
+        for (int l = 0; l < lines; l++) {
+            int base = l * lineStep;
+            long sr = 0, sg = 0, sb = 0;
+            for (int i = -r; i <= r; i++) {
+                int p = in[base + Math.max(0, Math.min(n - 1, i)) * step];
+                sr += (p >> 16) & 255;
+                sg += (p >> 8) & 255;
+                sb += p & 255;
+            }
+            int count = 2 * r + 1;
+            for (int i = 0; i < n; i++) {
+                out[base + i * step] = 0xFF000000 | ((int) (sr / count) << 16) | ((int) (sg / count) << 8) | (int) (sb / count);
+                int add = in[base + Math.min(n - 1, i + r + 1) * step], sub = in[base + Math.max(0, i - r) * step];
+                sr += ((add >> 16) & 255) - ((sub >> 16) & 255);
+                sg += ((add >> 8) & 255) - ((sub >> 8) & 255);
+                sb += (add & 255) - (sub & 255);
+            }
+        }
+    }
+
+    /** Doubles a small picture step by step (smoother than one big jump), or shrinks a big one in halves, to w by h. */
+    private static Bitmap scaleTo(Bitmap src, int w, int h) {
+        Bitmap cur = src;
+        while (cur.getWidth() * 2 <= w && cur.getHeight() * 2 <= h) {
+            cur = Bitmap.createScaledBitmap(cur, cur.getWidth() * 2, cur.getHeight() * 2, true);
+        }
+        while (cur.getWidth() / 2 >= w && cur.getHeight() / 2 >= h) {
+            cur = Bitmap.createScaledBitmap(cur, cur.getWidth() / 2, cur.getHeight() / 2, true);
+        }
+        if (cur.getWidth() != w || cur.getHeight() != h) cur = Bitmap.createScaledBitmap(cur, w, h, true);
+        return cur;
+    }
+
+    /**
+     * Draws wallpaper `id` (w-....jpg) for the screen from its original (o-w-....jpg), 2112 by 1188. mode 0 fills the
+     * screen with the middle of the picture: `offset` (0 to 1) says how far down, for a tall picture; mode 1 keeps it whole
+     * in the middle, its sides melting into a soft copy of itself.
+     */
+    static boolean render(Context c, String id, int mode, float offset) {
+        Bitmap b = BitmapFactory.decodeFile(new File(dir(c), "o-" + id).getPath());
+        if (b == null) return false;
+        int tw = Photos.W, th = Photos.H;
+        Bitmap screen = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888);
+        Canvas sc = new Canvas(screen);
+        Paint sp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+        RectF dst = new RectF(0, 0, tw, th);
+        if (mode == 0) {
+            float scale = Math.max(tw / (float) b.getWidth(), th / (float) b.getHeight());
+            int sw = Math.min(b.getWidth(), Math.round(tw / scale)), sh = Math.min(b.getHeight(), Math.round(th / scale));
+            int sx = (b.getWidth() - sw) / 2, sy = Math.round((b.getHeight() - sh) * Math.max(0, Math.min(1, offset)));
+            Bitmap part = Bitmap.createBitmap(b, sx, sy, sw, sh);
+            sc.drawBitmap(scaleTo(part, tw, th), null, dst, sp);
+        } else {
+            float ratio = b.getWidth() / (float) b.getHeight();
+            // the soft copy: the picture cut down to a few dozen pixels, its middle in 16:9, then doubled up smoothly
+            Bitmap tiny = Bitmap.createScaledBitmap(b, 48, Math.max(1, Math.round(48 / ratio)), true);
+            int pw = Math.min(tiny.getWidth(), Math.max(1, Math.round(tiny.getHeight() * 16f / 9)));
+            int ph = Math.min(tiny.getHeight(), Math.max(1, Math.round(pw * 9f / 16)));
+            Bitmap middle = Bitmap.createBitmap(tiny, (tiny.getWidth() - pw) / 2, (tiny.getHeight() - ph) / 2, pw, ph);
+            Bitmap haze = blurred(scaleTo(middle, 528, 297), 14);
+            sc.drawBitmap(Bitmap.createScaledBitmap(haze, tw, th, true), null, dst, sp);
+            sp.setColor(0x55000000);
+            sc.drawRect(dst, sp);
+            sp.setColor(0xFFFFFFFF);
+            float fit = Math.min(tw / (float) b.getWidth(), th / (float) b.getHeight());
+            int fw = Math.round(b.getWidth() * fit), fh = Math.round(b.getHeight() * fit);
+            Bitmap whole = scaleTo(b, fw, fh);
+            float fx = (tw - fw) / 2f, fy = (th - fh) / 2f, soft = Math.max(1, fw * 0.12f);
+            int layer = sc.saveLayer(fx, fy, fx + fw, fy + fh, null);
+            sc.drawBitmap(whole, null, new RectF(fx, fy, fx + fw, fy + fh), sp);
+            Paint mask = new Paint();
+            mask.setShader(new android.graphics.LinearGradient(fx, 0, fx + fw, 0, new int[] {0x00000000, 0xFF000000, 0xFF000000, 0x00000000},
+                    new float[] {0f, soft / fw, 1f - soft / fw, 1f}, Shader.TileMode.CLAMP));
+            mask.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
+            sc.drawRect(fx, fy, fx + fw, fy + fh, mask);
+            sc.restoreToCount(layer);
+        }
+        try (FileOutputStream f = new FileOutputStream(new File(dir(c), id))) {
+            screen.compress(Bitmap.CompressFormat.JPEG, 97, f);
+        } catch (IOException e) {
+            return false;
+        }
+        return true;
+    }
+
     /** Puts it behind the home screen: the home's own photo, one only. */
     private void apply(String id) {
         final Context app = getApplicationContext();
@@ -299,46 +400,14 @@ public class WallpaperActivity extends Activity {
             Bitmap b = BitmapFactory.decodeFile(tmp.getPath(), o);
             if (b == null) return null;
             b = turned(tmp, b);
-            int tw = Photos.W, th = Photos.H;
-            Bitmap screen = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888);
-            Canvas sc = new Canvas(screen);
-            Paint sp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
-            float ratio = b.getWidth() / (float) b.getHeight();
-            RectF dst = new RectF(0, 0, tw, th);
-            if (ratio >= 1.45f) {
-                // wide enough: it fills the screen, cutting only a little at the top and bottom or at the sides
-                int cw = b.getWidth(), ch = b.getHeight();
-                if (cw * 9 > ch * 16) cw = ch * 16 / 9; else ch = cw * 9 / 16;
-                Bitmap cut = Bitmap.createBitmap(b, (b.getWidth() - cw) / 2, (b.getHeight() - ch) / 2, cw, ch);
-                sc.drawBitmap(shrunk(cut, tw, th), null, dst, sp);
-            } else {
-                // tall or nearly square: kept whole in the middle, its sides melting into a soft copy of itself
-                Bitmap tiny = Bitmap.createScaledBitmap(b, 32, Math.max(1, Math.round(32 / ratio)), true);
-                float cover = Math.max(tw / (float) tiny.getWidth(), th / (float) tiny.getHeight());
-                float cw = tiny.getWidth() * cover, chh = tiny.getHeight() * cover;
-                sc.drawBitmap(tiny, null, new RectF((tw - cw) / 2, (th - chh) / 2, (tw + cw) / 2, (th + chh) / 2), sp);
-                sp.setColor(0x55000000);
-                sc.drawRect(dst, sp);
-                sp.setColor(0xFFFFFFFF);
-                float fit = Math.min(tw / (float) b.getWidth(), th / (float) b.getHeight());
-                int fw = Math.round(b.getWidth() * fit), fh = Math.round(b.getHeight() * fit);
-                Bitmap whole = shrunk(b, fw, fh);
-                float fx = (tw - fw) / 2f, fy = (th - fh) / 2f, soft = Math.max(1, fw * 0.12f);
-                int layer = sc.saveLayer(fx, fy, fx + fw, fy + fh, null);
-                sc.drawBitmap(whole, null, new RectF(fx, fy, fx + fw, fy + fh), sp);
-                Paint mask = new Paint();
-                mask.setShader(new android.graphics.LinearGradient(fx, 0, fx + fw, 0, new int[] {0x00000000, 0xFF000000, 0xFF000000, 0x00000000},
-                        new float[] {0f, soft / fw, 1f - soft / fw, 1f}, Shader.TileMode.CLAMP));
-                mask.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
-                sc.drawRect(fx, fy, fx + fw, fy + fh, mask);
-                sc.restoreToCount(layer);
-            }
             String name = "w-" + System.currentTimeMillis() + ".jpg";
-            try (FileOutputStream f = new FileOutputStream(new File(dir(app), name))) {
-                screen.compress(Bitmap.CompressFormat.JPEG, 97, f);
-            } catch (IOException e) {
+            try (FileOutputStream f = new FileOutputStream(new File(dir(app), "o-" + name))) {
+                b.compress(Bitmap.CompressFormat.JPEG, 95, f);   // the original, turned right: the editor draws from it
+            } catch (IOException ex) {
                 return null;
             }
+            float ratio = b.getWidth() / (float) b.getHeight();
+            if (!render(app, name, 0, ratio < 1f ? 0.3f : 0.5f)) return null;
             return name;
         }
 
@@ -409,7 +478,8 @@ public class WallpaperActivity extends Activity {
         private Bitmap qr;
         private final List<String> fresh = new ArrayList<>();   // pictures sent while the code was open
         private final java.util.Map<String, Bitmap> previews = new java.util.HashMap<>();
-        private int freshIndex, freshBtn;
+        private int freshIndex, freshBtn = 3, freshRow;
+        private final java.util.Map<String, float[]> adj = new java.util.HashMap<>();   // per picture: mode, offset
         private long renderUntil;
         private String qrUrl, hint = "";
         private long holdAt;
@@ -450,7 +520,7 @@ public class WallpaperActivity extends Activity {
                 List<File> list = new ArrayList<>(Arrays.asList(mine));
                 Collections.reverse(list);   // the newest first
                 for (File f : list) {
-                    if (f.getName().endsWith(".jpg")) {
+                    if (f.getName().startsWith("w-") && f.getName().endsWith(".jpg")) {
                         ids.add(f.getName());
                         thumbs.add(null);
                     }
@@ -496,14 +566,32 @@ public class WallpaperActivity extends Activity {
             if (!dpad) return false;
             if (page != null) {   // the code, or the pictures that came
                 if (e.getAction() != KeyEvent.ACTION_DOWN || fresh.isEmpty()) return true;
-                if (code == KeyEvent.KEYCODE_DPAD_LEFT && fresh.size() > 1) {
+                boolean ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
+                if (code == KeyEvent.KEYCODE_DPAD_UP) {
+                    freshRow = 0;
+                } else if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    freshRow = 1;
+                } else if (freshRow == 0 && code == KeyEvent.KEYCODE_DPAD_LEFT && fresh.size() > 1) {
                     freshIndex = (freshIndex - 1 + fresh.size()) % fresh.size();
                     apply(fresh.get(freshIndex));
-                } else if (code == KeyEvent.KEYCODE_DPAD_RIGHT && fresh.size() > 1) {
+                } else if (freshRow == 0 && code == KeyEvent.KEYCODE_DPAD_RIGHT && fresh.size() > 1) {
                     freshIndex = (freshIndex + 1) % fresh.size();
                     apply(fresh.get(freshIndex));
-                } else if ((code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) && e.getRepeatCount() == 0) {
+                } else if (freshRow == 1 && code == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    freshBtn = Math.max(0, freshBtn - 1);
+                } else if (freshRow == 1 && code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    freshBtn = Math.min(3, freshBtn + 1);
+                } else if (ok && freshRow == 1 && freshBtn < 3) {
+                    float[] a2 = adj.get(fresh.get(freshIndex));
+                    if (a2 != null) {
+                        if (freshBtn == 0) a2[0] = a2[0] == 0 ? 1 : 0;
+                        else if (a2[0] == 0) a2[1] = Math.max(0, Math.min(1, a2[1] + (freshBtn == 1 ? -0.12f : 0.12f)));
+                        redraw(fresh.get(freshIndex), a2);
+                    }
+                } else if (ok && e.getRepeatCount() == 0) {
+                    String id = fresh.get(freshIndex);
                     closeCode();
+                    apply(id);
                     return true;
                 }
                 invalidate();
@@ -557,8 +645,25 @@ public class WallpaperActivity extends Activity {
                 return;
             }
             new File(dir(getContext()), id).delete();
+            new File(dir(getContext()), "o-" + id).delete();
             hint = "Fondo borrado";
             reload();
+        }
+
+        /** Draws the picture again with the new choice (whole or filling, higher or lower) and shows it. */
+        private void redraw(String id, float[] a2) {
+            renderUntil = android.os.SystemClock.uptimeMillis() + 500;
+            final Context app = getContext().getApplicationContext();
+            final int mode = Math.round(a2[0]);
+            final float offset = a2[1];
+            worker.execute(() -> {
+                render(app, id, mode, offset);
+                Bitmap p = load(app, id, 1000, 563);
+                handler.post(() -> {
+                    previews.put(id, p);
+                    invalidate();
+                });
+            });
         }
 
         /** Closes the window of the code (and of the pictures that came); the list of wallpapers stays. */
@@ -582,7 +687,12 @@ public class WallpaperActivity extends Activity {
                         handler.post(() -> {
                             fresh.add(name);
                             freshIndex = fresh.size() - 1;
-                            freshBtn = 0;
+                            freshBtn = 3;
+                            freshRow = 0;
+                            BitmapFactory.Options bo = new BitmapFactory.Options();
+                            bo.inJustDecodeBounds = true;
+                            BitmapFactory.decodeFile(new File(dir(getContext()), "o-" + name).getPath(), bo);
+                            adj.put(name, new float[] {0, bo.outWidth < bo.outHeight ? 0.3f : 0.5f});
                             renderUntil = android.os.SystemClock.uptimeMillis() + 700;
                             apply(name);
                             hint = "Foto agregada";
@@ -746,15 +856,18 @@ public class WallpaperActivity extends Activity {
                 c.drawPath(a, fill);
                 c.drawText((freshIndex + 1) + " de " + fresh.size(), w / 2f, y + ih + 50 * k, sub);
             }
-            // the buttons
-            String[] labels = {"Aceptar"};
+            // the buttons: whole or filling, higher, lower, accept
+            float[] a2 = adj.get(id);
+            boolean filling = a2 == null || a2[0] == 0;
+            String[] labels = {filling ? "Ver entera" : "Llenar pantalla", "\u25B2 Subir", "\u25BC Bajar", "Aceptar"};
             label.setTextAlign(Paint.Align.CENTER);
-            label.setTextSize(30 * k);
-            for (int i = 0; i < 1; i++) {
-                float top = y + ih + 80 * k + i * 90 * k;
-                r.set(w / 2f - 230 * k, top, w / 2f + 230 * k, top + 72 * k);
-                boolean on = true;
-                fill.setColor(0xFFFF2A3A);
+            label.setTextSize(28 * k);
+            float bw = 320 * k, gap = 20 * k, bx = (w - (4 * bw + 3 * gap)) / 2f, by = y + ih + 90 * k;
+            for (int i = 0; i < 4; i++) {
+                float bl = bx + i * (bw + gap);
+                r.set(bl, by, bl + bw, by + 72 * k);
+                boolean on = freshRow == 1 && freshBtn == i, off = (i == 1 || i == 2) && !filling;
+                fill.setColor(i == 3 ? (on ? 0xFFFF2A3A : 0xFFC4101F) : (on ? 0x66FFFFFF : 0x28FFFFFF));
                 c.drawRoundRect(r, 36 * k, 36 * k, fill);
                 if (on) {
                     fill.setStyle(Paint.Style.STROKE);
@@ -763,7 +876,9 @@ public class WallpaperActivity extends Activity {
                     c.drawRoundRect(r, 36 * k, 36 * k, fill);
                     fill.setStyle(Paint.Style.FILL);
                 }
-                c.drawText(labels[i], w / 2f, top + 48 * k, label);
+                label.setAlpha(off ? 90 : 255);
+                c.drawText(labels[i], bl + bw / 2, by + 48 * k, label);
+                label.setAlpha(255);
             }
             label.setTextSize(26 * k);
             label.setTextAlign(Paint.Align.LEFT);
