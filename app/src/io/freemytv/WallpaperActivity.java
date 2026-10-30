@@ -305,20 +305,33 @@ public class WallpaperActivity extends Activity {
             Paint sp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
             float ratio = b.getWidth() / (float) b.getHeight();
             RectF dst = new RectF(0, 0, tw, th);
-            if (Math.abs(ratio - 16f / 9) < 0.05f) {
-                sc.drawBitmap(shrunk(b, tw, th), null, dst, sp);
+            if (ratio >= 1.45f) {
+                // wide enough: it fills the screen, cutting only a little at the top and bottom or at the sides
+                int cw = b.getWidth(), ch = b.getHeight();
+                if (cw * 9 > ch * 16) cw = ch * 16 / 9; else ch = cw * 9 / 16;
+                Bitmap cut = Bitmap.createBitmap(b, (b.getWidth() - cw) / 2, (b.getHeight() - ch) / 2, cw, ch);
+                sc.drawBitmap(shrunk(cut, tw, th), null, dst, sp);
             } else {
+                // tall or nearly square: kept whole in the middle, its sides melting into a soft copy of itself
                 Bitmap tiny = Bitmap.createScaledBitmap(b, 32, Math.max(1, Math.round(32 / ratio)), true);
                 float cover = Math.max(tw / (float) tiny.getWidth(), th / (float) tiny.getHeight());
                 float cw = tiny.getWidth() * cover, chh = tiny.getHeight() * cover;
                 sc.drawBitmap(tiny, null, new RectF((tw - cw) / 2, (th - chh) / 2, (tw + cw) / 2, (th + chh) / 2), sp);
-                sp.setColor(0x88000000);
+                sp.setColor(0x55000000);
                 sc.drawRect(dst, sp);
                 sp.setColor(0xFFFFFFFF);
                 float fit = Math.min(tw / (float) b.getWidth(), th / (float) b.getHeight());
                 int fw = Math.round(b.getWidth() * fit), fh = Math.round(b.getHeight() * fit);
                 Bitmap whole = shrunk(b, fw, fh);
-                sc.drawBitmap(whole, null, new RectF((tw - fw) / 2f, (th - fh) / 2f, (tw + fw) / 2f, (th + fh) / 2f), sp);
+                float fx = (tw - fw) / 2f, fy = (th - fh) / 2f, soft = Math.max(1, fw * 0.12f);
+                int layer = sc.saveLayer(fx, fy, fx + fw, fy + fh, null);
+                sc.drawBitmap(whole, null, new RectF(fx, fy, fx + fw, fy + fh), sp);
+                Paint mask = new Paint();
+                mask.setShader(new android.graphics.LinearGradient(fx, 0, fx + fw, 0, new int[] {0x00000000, 0xFF000000, 0xFF000000, 0x00000000},
+                        new float[] {0f, soft / fw, 1f - soft / fw, 1f}, Shader.TileMode.CLAMP));
+                mask.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
+                sc.drawRect(fx, fy, fx + fw, fy + fh, mask);
+                sc.restoreToCount(layer);
             }
             String name = "w-" + System.currentTimeMillis() + ".jpg";
             try (FileOutputStream f = new FileOutputStream(new File(dir(app), name))) {
@@ -335,9 +348,7 @@ public class WallpaperActivity extends Activity {
             while (cur.getWidth() / 2 >= tw && cur.getHeight() / 2 >= th) {
                 cur = Bitmap.createScaledBitmap(cur, cur.getWidth() / 2, cur.getHeight() / 2, true);
             }
-            if (cur.getWidth() != tw || cur.getHeight() != th) {
-                if (cur.getWidth() > tw || cur.getHeight() > th) cur = Bitmap.createScaledBitmap(cur, tw, th, true);
-            }
+            if (cur.getWidth() != tw || cur.getHeight() != th) cur = Bitmap.createScaledBitmap(cur, tw, th, true);
             return cur;
         }
 
