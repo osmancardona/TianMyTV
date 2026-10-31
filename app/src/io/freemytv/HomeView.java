@@ -116,7 +116,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
     private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, MENU = 8, RECENT = 9;
-    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MEDIA = 20;
+    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MEDIA = 20, Z_DISC = 7;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
@@ -198,6 +198,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private List<WatchNext.Item> watching = new ArrayList<>();
     private final Spring[] watchFocus = new Spring[WatchNext.MAX];
     private final Spring watchScroll = new Spring(0.32f, 1f, 0);
+    // The row under the apps: pictures cut from the home page of Xuper (Magis...), peeking at the bottom edge until focused.
+    private List<Bitmap> disc = new ArrayList<>();
+    private String discPkg;
+    private volatile long discStamp = -1;
+    private int discIndex;
+    private final Spring discUp = new Spring(0.34f, 1f, 0), discScroll = new Spring(0.32f, 1f, 0);
+    private final Spring[] discFocus = new Spring[12];
+    {
+        for (int i = 0; i < discFocus.length; i++) discFocus[i] = new Spring(0.3f, 1f, 0);
+    }
+    private final RectF discCell = new RectF();
+    private final Path discClip = new Path();
     private int watchIndex;
     private boolean watchAllowed = true;
     private boolean watchLoaded;   // read at least once: before that, no "nothing half-watched"
@@ -418,7 +430,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 case SHEET: drawSheet(c); break;
                 case MENU: drawMenu(c); break;
                 case RECENT: if (recents != null) recents.draw(c, w, h); break;
-                default: drawToast(c); break;
+                default: drawDiscover(c); drawToast(c); break;
             }
             scene.setOffset(0, 0);
         }
@@ -862,7 +874,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(drawerLayer, width, Math.round(600 * kk));
         measure(sheetLayer, width, height);
         measure(menuLayer, width, height);
-        measure(toastLayer, width, Math.round(220 * kk));   // full width: a toast may sit right of a long title
+        measure(toastLayer, width, height);   // full width: a toast may sit right of a long title
         measure(recentLayer, width, height);
         setMeasuredDimension(width, height);
     }
@@ -1022,6 +1034,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean heroMoving = heroFocus.step(dt);
         boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt) | step(cardOpen, dt) | cardScroll.step(dt)
                 | step(watchFocus, dt) | watchScroll.step(dt);
+        if (discUp.step(dt) | step(discFocus, dt) | discScroll.step(dt)) toastLayer.invalidate();
         boolean tintMoving = tintMix.step(dt);
         if (tintMoving) {
             sky.invalidate();
@@ -2625,6 +2638,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             handler.removeCallbacks(bgFollow);
             handler.postDelayed(bgFollow, BG_FOLLOW_MS);
         }
+        discUp.target = !sheetOpen && zone == Z_DISC ? 1 : 0;
+        aim(discFocus, !sheetOpen && zone == Z_DISC ? discIndex : -1, snap);
+        discScroll.target = Math.max(0, Math.min(discIndex - 2, disc.size() - 3));
+        if (snap) { discUp.snap(discUp.target); discScroll.snap(discScroll.target); }
+        toastLayer.invalidate();
         heroChanged |= aim(watchFocus, !sheetOpen && zone == Z_WATCH ? watchIndex : -1, snap);
         updateTint();
         // The row scrolls so the focused card is at most the third one on screen.
@@ -2889,11 +2907,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // Only read when it's shown: with the picks or the clock, Continue Watching costs nothing.
             final String mode = Prefs.topContent();
             final boolean allowed = WatchNext.allowed(c);
+            final long stamp = Recent.discoverStamp(c);
+            final boolean discNew = stamp != discStamp;
+            final Recent.Discover dsc = discNew ? Recent.discoverNow(c) : null;
             final List<WatchNext.Item> w = mode.equals(Prefs.TOP_CONTINUE) ? WatchNext.load(c)
                     : mode.equals(Prefs.TOP_PICKS) ? new ArrayList<>() : Recent.load(c);
             handler.post(() -> {
                 if (top != null) setLightButtons(top);
                 setTopContent(mode, w, allowed);
+                if (discNew) {
+                    discStamp = stamp;
+                    setDiscover(dsc);
+                }
                 if (s != null) setShelf(s);
                 setStatusItems(st);
                 setDrawerItems(d);
@@ -3297,6 +3322,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void back() {
         if (sheetOpen) {
             closeSheet();
+        } else if (zone == Z_DISC) {
+            zone = Z_DRAWER;
+            retarget(false);
         } else if (zone == Z_DRAWER || zone == WIDGETS) {
             closeDrawer();
             retarget(false);
@@ -3381,6 +3409,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     drawerIndex = next;
                 } else if (dy < 0) {
                     closeDrawer();
+                } else if (!disc.isEmpty()) {
+                    zone = Z_DISC;
+                    discIndex = Math.min(discIndex, disc.size() - 1);
                 } else if (talkBack() && !widgets().isEmpty()) {
                     // Only with TalkBack: the widgets are there to be read, and this is how it gets to them.
                     zone = WIDGETS;
@@ -3501,6 +3532,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             }
             it = lightButtons.get(topIndex - 3);
             r = topRects[topIndex];
+        } else if (zone == Z_DISC) {
+            Intent open = discPkg == null ? null : activity.getPackageManager().getLaunchIntentForPackage(discPkg);
+            if (open == null) return;
+            click.open();
+            activity.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
         } else if (zone == Z_WATCH) {
             if (watchIndex >= watching.size()) return;
             click.open();
@@ -4251,6 +4288,75 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         retarget(modeChanged);
         heroDirty = true;
+    }
+
+    private void setDiscover(Recent.Discover d) {
+        List<Bitmap> list = d == null ? new ArrayList<>() : d.pictures;
+        discPkg = d == null ? null : d.pkg;
+        disc = list;
+        if (list.isEmpty() && zone == Z_DISC) zone = Z_SHELF;
+        discIndex = Math.min(discIndex, Math.max(0, list.size() - 1));
+        toastLayer.invalidate();
+    }
+
+    /** The row under the apps: a strip of pictures peeking at the bottom, rising over the shelf when focused. */
+    private void drawDiscover(Canvas c) {
+        float open = Ui.clamp(drawer.value);
+        if (disc.isEmpty() || open < 0.02f) return;
+        float up = Ui.clamp(discUp.value);
+        float cw = 330 * k, ch = 178 * k, gap = 24 * k;
+        float y = (h - 60 * k) + ((730 * k) - (h - 60 * k)) * up;
+        if (up > 0.01f) {
+            // The focused picture as the backdrop, the others fading out as it changes.
+            for (int i = 0; i < disc.size(); i++) {
+                float f = Ui.clamp(discFocus[i].value) * up;
+                if (f < 0.01f) continue;
+                Bitmap b = disc.get(i);
+                float sc = Math.max(w / (float) b.getWidth(), h / (float) b.getHeight());
+                float bw = b.getWidth() * sc, bh = b.getHeight() * sc;
+                discCell.set((w - bw) / 2, (h - bh) / 2, (w + bw) / 2, (h + bh) / 2);
+                fill.setShader(null);
+                fill.setAlpha(Math.round(255 * f));
+                c.drawBitmap(b, null, discCell, fill);
+                fill.setAlpha(255);
+            }
+            fill.setShader(new LinearGradient(0, 0, w, 0, Ui.alpha(0xFF000000, 0.75f * up), 0x00000000, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, fill);
+            fill.setShader(null);
+            fill.setShader(new LinearGradient(0, y - 120 * k, 0, y + 40 * k, 0x00000000, Ui.alpha(0xFF000000, 0.8f * up), Shader.TileMode.CLAMP));
+            c.drawRect(0, y - 120 * k, w, h, fill);
+            fill.setShader(null);
+            fill.setColor(Ui.alpha(0xFF000000, 0.8f * up));
+            c.drawRect(0, y + 40 * k, w, h, fill);
+            lCardMeta.setAlpha(Math.round(255 * up));
+            c.drawText("Estrenos en Xuper", MARGIN * k, y - 30 * k, lCardMeta);
+            lCardMeta.setAlpha(255);
+        }
+        c.save();
+        c.clipRect(0, 0, w, h);
+        for (int i = 0; i < disc.size(); i++) {
+            float f = Ui.clamp(discFocus[i].value), s = 1 + 0.06f * f;
+            float x = MARGIN * k + i * (cw + gap) - discScroll.value * (cw + gap);
+            if (x > w || x + cw < 0) continue;
+            float cx = x + cw / 2, cy = y + ch / 2;
+            discCell.set(cx - cw * s / 2, cy - ch * s / 2, cx + cw * s / 2, cy + ch * s / 2);
+            float r = 16 * k;
+            discClip.reset();
+            discClip.addRoundRect(discCell, r, r, Path.Direction.CW);
+            c.save();
+            c.clipPath(discClip);
+            fill.setAlpha(Math.round(255 * (0.55f + 0.45f * Math.max(up, f))));
+            c.drawBitmap(disc.get(i), null, discCell, fill);
+            fill.setAlpha(255);
+            c.restore();
+            if (f > 0.02f) {
+                rim.setShader(null);
+                rim.setColor(Ui.alpha(0xFFFFFFFF, f));
+                rim.setStrokeWidth(3 * k);
+                c.drawRoundRect(discCell, r, r, rim);
+            }
+        }
+        c.restore();
     }
 
     private static boolean sameWatching(List<WatchNext.Item> a, List<WatchNext.Item> b) {
@@ -5191,6 +5297,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 } else {
                     zone = Z_SHELF;
                     if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, cardRects[cardIndex].centerX());
+                }
+                break;
+            case Z_DISC:
+                if (dx != 0) {
+                    int next = Math.max(0, Math.min(disc.size() - 1, discIndex + dx));
+                    if (next == discIndex) return true;
+                    discIndex = next;
+                } else if (dy < 0) {
+                    zone = Z_DRAWER;
+                } else {
+                    return true;
                 }
                 break;
             case Z_WATCH:

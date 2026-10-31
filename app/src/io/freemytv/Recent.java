@@ -145,6 +145,111 @@ final class Recent {
 
     // Apps that play without a media session (Xuper): the title is read from its own screen, with the TV's own debug
     // connection (as Clean does), only while it is in front and something is playing.
+    // The home page of the same apps (Xuper, Magis): the pictures on its screen, cut out, for the row under the apps.
+    private static final java.util.regex.Pattern NODE = java.util.regex.Pattern.compile("<node [^>]*>");
+
+    private static void discover(Adb adb, String top) throws java.io.IOException {
+        java.util.regex.Matcher mp = java.util.regex.Pattern.compile("u0 ([A-Za-z0-9_.]+)/").matcher(top);
+        if (!mp.find()) return;
+        String pkg = mp.group(1);
+        String xml = adb.shell("uiautomator dump /sdcard/tian-u.xml >/dev/null 2>&1; cat /sdcard/tian-u.xml; rm -f /sdcard/tian-u.xml");
+        AppLog.w("discover xml " + (xml == null ? -1 : xml.length()));
+        if (xml == null) return;
+        List<int[]> boxes = new ArrayList<>();
+        int side = 0;
+        java.util.regex.Matcher mn = NODE.matcher(xml);
+        while (mn.find()) {
+            String n = mn.group();
+            boolean tab = n.contains(":id/mGridTab\"");
+            if (!tab && !n.contains(":id/mImgPoster\"")) continue;
+            java.util.regex.Matcher mb = java.util.regex.Pattern.compile("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"").matcher(n);
+            if (!mb.find()) continue;
+            int l = Integer.parseInt(mb.group(1)), t = Integer.parseInt(mb.group(2)), r = Integer.parseInt(mb.group(3)), b = Integer.parseInt(mb.group(4));
+            if (tab) {
+                side = r;   // the side menu may be open: it covers the first pictures
+                continue;
+            }
+            if (t < 140 || b > 1080 || r - l < 300 || b - t < 150) continue;   // whole pictures only
+            boxes.add(new int[] {l, t, r, b});
+        }
+        final int menu = side > 140 ? side : 0;
+        boxes.removeIf(bx -> bx[0] < menu);
+        AppLog.w("discover boxes " + boxes.size() + " menu " + menu);
+        if (boxes.size() < 3) return;
+        java.util.Collections.sort(boxes, (x, y) -> x[1] != y[1] ? x[1] - y[1] : x[0] - y[0]);
+        String b64 = adb.shell("screencap -p | toybox base64 -w 0");
+        byte[] png = b64 == null ? null : android.util.Base64.decode(b64.trim(), android.util.Base64.DEFAULT);
+        android.graphics.Bitmap full = png == null ? null : android.graphics.BitmapFactory.decodeByteArray(png, 0, png.length);
+        String again = adb.shell("dumpsys activity activities | grep -m1 topResumedActivity");
+        if (full == null || again == null || !again.contains(pkg + "/com.main.ui.activity.HomeActivity")) return;   // left meanwhile
+        float sx = full.getWidth() / 1920f, sy = full.getHeight() / 1080f;
+        File dir = new File(app.getFilesDir(), "disc2");
+        dir.mkdirs();
+        JSONArray names = new JSONArray();
+        int n = 0;
+        for (int[] bx : boxes) {
+            if (n >= 8) break;
+            int l = Math.round((bx[0] + 4) * sx), t = Math.round((bx[1] + 4) * sy), r = Math.round((bx[2] - 4) * sx), b = Math.round((bx[3] - 4) * sy);
+            if (r - l < 40 || b - t < 40) continue;
+            android.graphics.Bitmap crop = android.graphics.Bitmap.createBitmap(full, l, t, r - l, b - t);
+            int w = Math.min(520, crop.getWidth()), h = Math.round(crop.getHeight() * (w / (float) crop.getWidth()));
+            android.graphics.Bitmap small = android.graphics.Bitmap.createScaledBitmap(crop, w, h, true);
+            File f = new File(dir, "d" + n + ".jpg");
+            try (FileOutputStream out = new FileOutputStream(f)) {
+                small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, out);
+            }
+            names.put(f.getName());
+            n++;
+        }
+        AppLog.w("discover saved " + n);
+        if (n < 3) return;
+        try {
+            File meta = new File(dir, "discover.json");
+            try (FileOutputStream out = new FileOutputStream(meta)) {
+                out.write(new JSONObject().put("pkg", pkg).put("files", names).toString().getBytes("UTF-8"));
+            }
+        } catch (org.json.JSONException e) {
+            AppLog.w("recent discover: " + e.getMessage());
+        }
+    }
+
+    /** What was last cut from the apps' home page: the app and the pictures (decoded here, in the background). */
+    static final class Discover {
+        String pkg;
+        final List<android.graphics.Bitmap> pictures = new ArrayList<>();
+    }
+
+    static long discoverStamp(Context c) {
+        return new File(new File(c.getFilesDir(), "disc2"), "discover.json").lastModified();
+    }
+
+    static Discover discoverNow(Context c) {
+        File dir = new File(c.getFilesDir(), "disc2");
+        File meta = new File(dir, "discover.json");
+        if (!meta.exists()) return null;
+        try (FileInputStream in = new FileInputStream(meta)) {
+            byte[] b = new byte[(int) meta.length()];
+            int got = 0;
+            while (got < b.length) {
+                int r = in.read(b, got, b.length - got);
+                if (r < 0) break;
+                got += r;
+            }
+            JSONObject o = new JSONObject(new String(b, 0, got, "UTF-8"));
+            Discover d = new Discover();
+            d.pkg = o.optString("pkg");
+            JSONArray files = o.optJSONArray("files");
+            if (files == null) return null;
+            for (int i = 0; i < files.length(); i++) {
+                android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(new File(dir, files.getString(i)).getPath());
+                if (bm != null) d.pictures.add(bm);
+            }
+            return d.pictures.size() >= 3 ? d : null;
+        } catch (java.io.IOException | org.json.JSONException | RuntimeException e) {
+            return null;
+        }
+    }
+
     /** A frame the TV could not capture (video layers can come out black): not worth keeping as a picture. */
     private static boolean dark(android.graphics.Bitmap b) {
         android.graphics.Bitmap t = android.graphics.Bitmap.createScaledBitmap(b, 16, 9, true);
@@ -169,10 +274,15 @@ final class Recent {
     private static void sweepScreen() {
         try {
             android.media.AudioManager am = app.getSystemService(android.media.AudioManager.class);
-            if (am == null || !am.isMusicActive()) return;
             try (Adb adb = Adb.connect(app, 3000, null)) {
                 String top = adb.shell("dumpsys activity activities | grep -m1 topResumedActivity");
-                if (top == null || !top.contains("/com.vod.ui.activity.VodDetailsActivity")) return;
+                if (top == null || top.contains(app.getPackageName())) return;
+                if (top.contains("/com.main.ui.activity.HomeActivity")) {
+                    discover(adb, top);
+                    return;
+                }
+                if (am == null || !am.isMusicActive()) return;
+                if (!top.contains("/com.vod.ui.activity.VodDetailsActivity")) return;
                 String xml = adb.shell("uiautomator dump /sdcard/tian-u.xml >/dev/null 2>&1; cat /sdcard/tian-u.xml; rm -f /sdcard/tian-u.xml");
                 java.util.regex.Matcher mt = java.util.regex.Pattern
                         .compile("<node [^>]*text=\"([^\"]*)\"[^>]*resource-id=\"[^\"]*:id/mTextTitle\"").matcher(xml == null ? "" : xml);
