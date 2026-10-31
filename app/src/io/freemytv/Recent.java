@@ -148,14 +148,14 @@ final class Recent {
     /** A frame the TV could not capture (video layers can come out black): not worth keeping as a picture. */
     private static boolean dark(android.graphics.Bitmap b) {
         android.graphics.Bitmap t = android.graphics.Bitmap.createScaledBitmap(b, 16, 9, true);
-        long sum = 0;
+        int lit = 0;
         for (int y = 0; y < 9; y++) {
             for (int x = 0; x < 16; x++) {
                 int c = t.getPixel(x, y);
-                sum += ((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255);
+                if (((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255) > 150) lit++;   // subtitles and logos alone stay under a third
             }
         }
-        return sum / (144 * 3) < 14;
+        return lit < 48;
     }
 
     private static boolean playingSession() {
@@ -172,7 +172,7 @@ final class Recent {
             if (am == null || !am.isMusicActive()) return;
             try (Adb adb = Adb.connect(app, 3000, null)) {
                 String top = adb.shell("dumpsys activity activities | grep -m1 topResumedActivity");
-                if (top == null || !top.contains("xupersbc") || !top.contains("VodDetailsActivity")) return;
+                if (top == null || !top.contains("/com.vod.ui.activity.VodDetailsActivity")) return;
                 String xml = adb.shell("uiautomator dump /sdcard/tian-u.xml >/dev/null 2>&1; cat /sdcard/tian-u.xml; rm -f /sdcard/tian-u.xml");
                 java.util.regex.Matcher mt = java.util.regex.Pattern
                         .compile("<node [^>]*text=\"([^\"]*)\"[^>]*resource-id=\"[^\"]*:id/mTextTitle\"").matcher(xml == null ? "" : xml);
@@ -203,7 +203,7 @@ final class Recent {
     }
 
     private static String artName(String pkg, String title) {
-        return "recent-art/v2-" + Integer.toHexString((pkg + "|" + title).hashCode()) + ".jpg";
+        return "recent-art/v3-" + Integer.toHexString((pkg + "|" + title).hashCode()) + ".jpg";
     }
 
     /** The card's picture, kept once per title (in the background: it may need a download). */
